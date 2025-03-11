@@ -1,0 +1,34 @@
+services:
+    db:
+        build:
+            context: .
+            dockerfile: Dockerfile.pg
+        container_name: ecomm-be-pg
+        restart: always
+        environment:
+            PGDATA: /var/lib/postgresql/data/pgdata
+            POSTGRES_USER: root
+            POSTGRES_PASSWORD: root
+            POSTGRES_DB: ecomm-be
+        volumes:
+            - pgdata:/var/lib/postgresql/data
+            - ./pg.conf:/etc/postgresql/postgresql.conf
+        ports:
+            - "5433:5432"
+        command: ["-c", "config_file=/etc/postgresql/postgresql.conf"]
+
+    nats:
+        image: nats:2.10.25-alpine3.21
+        container_name: ecomm-be-nats
+        restart: always
+        ports:
+            - "4222:4222"
+            - "8222:8222"
+        volumes:
+            - ./nats.conf:/etc/nats/nats.conf
+            - jetstream:/data/jetstream
+        command: ["-c", "/etc/nats/nats.conf"]
+
+volumes:
+    pgdata:
+    jetstream:
