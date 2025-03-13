@@ -2,17 +2,15 @@ import { NatsConnection, connect } from "nats";
 import { jetstream } from "@nats-io/jetstream";
 import { backOff } from "exponential-backoff";
 
-import { Logger } from "shared/logger";
 import { OutboxRecord } from "./models/outbox-record";
 import { RetryCallback, RetryConfig } from "./types";
+import { logger } from "./logger";
+import { JitterType } from "exponential-backoff/dist/options";
 
 export class NATSPublisher {
 	private connection: NatsConnection | null = null;
 
-	constructor(
-		private readonly logger: Logger,
-		private readonly retryConfig: RetryConfig,
-	) {}
+	constructor(private readonly retryConfig: RetryConfig) {}
 
 	async publish({ record, retry }: { record: OutboxRecord; retry: RetryCallback }): Promise<number> {
 		if (!this.connection) {
@@ -24,7 +22,7 @@ export class NATSPublisher {
 		const jc = jetstream(this.connection);
 
 		try {
-			this.logger.info({
+			logger.info({
 				message: "Publishing message to NATS stream",
 				extra: {
 					eventType: record.eventType,
@@ -37,13 +35,13 @@ export class NATSPublisher {
 				{
 					maxDelay: this.retryConfig.maxDelayInMs,
 					numOfAttempts: this.retryConfig.numOfAttempts,
-					jitter: this.retryConfig.jitter,
+					jitter: this.retryConfig.jitter as JitterType,
 					startingDelay: this.retryConfig.startingDelayInMs,
 					retry,
 				},
 			);
 
-			this.logger.info({
+			logger.info({
 				message: "Published message to NATS stream",
 				extra: {
 					eventType: record.eventType,
@@ -55,7 +53,7 @@ export class NATSPublisher {
 
 			return seq;
 		} catch (error) {
-			this.logger.error({
+			logger.error({
 				message: "Error publishing message to NATS stream",
 				extra: {
 					eventType: record.eventType,
