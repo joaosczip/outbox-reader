@@ -1,8 +1,7 @@
-import { PrismaClient } from "@prisma/client";
+import { Pool } from "pg";
 import { backOff } from "exponential-backoff";
 import { DateTime } from "luxon";
 
-import { SharedDBClient } from "shared/database";
 import { RetryCallback, RetryConfig } from "./types";
 import { JitterType } from "exponential-backoff/dist/options";
 import { OutboxRecord } from "./models/outbox-record";
@@ -14,85 +13,75 @@ type UpdateOutboxRecordParams = {
 	retry: RetryCallback;
 };
 
-export class OutboxPrismaRepository extends SharedDBClient {
+export class OutboxRepository {
 	constructor(
-		private dbClient: PrismaClient,
+		private pool: Pool,
 		private retryConfig: RetryConfig,
-	) {
-		super();
-	}
+	) {}
 
 	async findUnprocessedById(id: string) {
-		return this.dbClient.outbox.findFirst({
-			where: {
-				id,
-				status: {
-					in: ["PENDING", "FAILED"],
-				},
-			},
-		});
+		const query = `
+			SELECT * FROM outbox
+			WHERE id = $1 AND status IN ('PENDING', 'FAILED')
+		`;
+		const result = await this.pool.query(query, [id]);
+		return result.rows[0] || null;
 	}
 
 	async findFailedEvents() {
-		return this.dbClient.outbox.findMany({
-			where: {
-				status: "FAILED",
-			},
-		});
+		const query = `
+			SELECT * FROM outbox
+			WHERE status = 'FAILED'
+		`;
+		const result = await this.pool.query(query);
+		return result.rows;
 	}
 
 	async findRecentPendingEvents(minutes = 10) {
-		return this.dbClient.outbox.findMany({
-			where: {
-				createdAt: {
-					gte: DateTime.now().minus({ minutes }).toJSDate(),
-				},
-				status: "PENDING",
-			},
-			orderBy: {
-				createdAt: "asc",
-			},
-		});
+		const query = `
+			SELECT * FROM outbox
+			WHERE created_at >= $1 AND status = 'PENDING'
+			ORDER BY created_at ASC
+		`;
+		const minDate = DateTime.now().minus({ minutes }).toJSDate();
+		const result = await this.pool.query(query, [minDate]);
+		return result.rows;
 	}
 
 	async findLastProcessedEvent(): Promise<OutboxRecord | null> {
-		const lastProcessedEvent = await this.dbClient.outbox.findFirst({
-			orderBy: {
-				sequenceNumber: "desc",
-			},
-			where: {
-				status: "PROCESSED",
-			},
-		});
+		const query = `
+			SELECT * FROM outbox
+			WHERE status = 'PROCESSED'
+			ORDER BY sequence_number DESC
+			LIMIT 1
+		`;
+		const result = await this.pool.query(query);
+		const lastProcessedEvent = result.rows[0];
 
 		return lastProcessedEvent
 			? new OutboxRecord({
 					...lastProcessedEvent,
-					status: lastProcessedEvent.status as any,
-					sequenceNumber: lastProcessedEvent.sequenceNumber as number,
-					createdAt: lastProcessedEvent.createdAt.toISOString(),
-					processedAt: (lastProcessedEvent.processedAt as Date).toISOString(),
+					status: lastProcessedEvent.status,
+					sequenceNumber: lastProcessedEvent.sequence_number,
+					createdAt: lastProcessedEvent.created_at.toISOString(),
+					processedAt: lastProcessedEvent.processed_at?.toISOString(),
 				})
 			: null;
 	}
 
 	async markAsProcessed({ id, sequenceNumber, attempts, retry }: UpdateOutboxRecordParams): Promise<void> {
 		await backOff(
-			async () =>
-				this.dbClient.outbox.update({
-					where: {
-						id,
-						attempts,
-					},
-					data: {
-						status: "PROCESSED",
-						processedAt: new Date(),
-						attempts: {
-							increment: 1,
-						},
-						sequenceNumber,
-					},
-				}),
+			async () => {
+				const query = `
+					UPDATE outbox 
+					SET status = 'PROCESSED', 
+						processed_at = NOW(), 
+						attempts = attempts + 1, 
+						sequence_number = $1
+					WHERE id = $2 AND attempts = $3
+				`;
+				return this.pool.query(query, [sequenceNumber, id, attempts]);
+			},
 			{
 				retry,
 				startingDelay: this.retryConfig.startingDelayInMs,
@@ -105,19 +94,15 @@ export class OutboxPrismaRepository extends SharedDBClient {
 
 	async markAsFailed({ id, attempts, retry }: Omit<UpdateOutboxRecordParams, "sequenceNumber">): Promise<void> {
 		await backOff(
-			async () =>
-				this.dbClient.outbox.update({
-					where: {
-						id,
-						attempts,
-					},
-					data: {
-						status: "FAILED",
-						attempts: {
-							increment: 1,
-						},
-					},
-				}),
+			async () => {
+				const query = `
+					UPDATE outbox 
+					SET status = 'FAILED', 
+						attempts = attempts + 1
+					WHERE id = $1 AND attempts = $2
+				`;
+				return this.pool.query(query, [id, attempts]);
+			},
 			{
 				retry,
 				startingDelay: this.retryConfig.startingDelayInMs,
