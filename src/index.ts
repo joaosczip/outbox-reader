@@ -1,17 +1,16 @@
 import "dotenv/config";
+import { Pool } from "pg";
 import { LogicalReplicationService, Wal2Json, Wal2JsonPlugin } from "pg-logical-replication";
 
 import { OutboxConstructor, OutboxRecord } from "./models/outbox-record";
 import { NATSPublisher } from "./nats-publisher";
+import { logger } from "./logger";
+import { config, dbWriteRetryConfig, natsPublisherRetryConfig } from "./config";
+import { OutboxRepository } from "./outbox-repository";
 
-import { outboxRepositoryFactory } from "./factories";
-import { config, natsPublisherRetryConfig } from "./config";
-import { Logger } from "./logger";
-
-const outboxRepository = outboxRepositoryFactory();
-
-const logger = new Logger("outbox-reader");
-const natsPublisher = new NATSPublisher(logger, natsPublisherRetryConfig);
+const pool = new Pool({ connectionString: config.connectionString });
+const outboxRepository = new OutboxRepository(pool, dbWriteRetryConfig);
+const natsPublisher = new NATSPublisher(natsPublisherRetryConfig);
 
 const filterChanges = (log: Wal2Json.Output) => {
 	const onlyInsertsOnOutbox = ({ table, columnnames, kind }: Wal2Json.Change) =>

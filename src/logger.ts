@@ -40,5 +40,5 @@ class Logger {
 	}
 }
 
-const logger = new Logger();
+const logger = new Logger("outbox-reader");
 export { logger };
