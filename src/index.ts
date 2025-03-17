@@ -1,12 +1,13 @@
 import "dotenv/config";
 import { Pool } from "pg";
-import { LogicalReplicationService, Wal2Json, Wal2JsonPlugin } from "pg-logical-replication";
+import { Wal2Json } from "pg-logical-replication";
 
 import { OutboxConstructor, OutboxRecord } from "./models/outbox-record";
 import { NATSPublisher } from "./nats-publisher";
 import { Logger } from "./logger";
 import { config, dbWriteRetryConfig, natsPublisherRetryConfig } from "./config";
 import { OutboxRepository } from "./outbox-repository";
+import { startReplication } from "./replication";
 
 const logger = new Logger("outbox-reader");
 const pool = new Pool({ connectionString: config.connectionString });
@@ -114,21 +115,15 @@ const processOutboxRecord = async (record: OutboxRecord) => {
 	}
 };
 
-const startReplication = async () => {
-	const { connectionString, slotName } = config;
+const { connectionString, slotName } = config;
 
-	const plugin = new Wal2JsonPlugin();
-
-	const replicationService = new LogicalReplicationService({
-		connectionString: `${connectionString}?replication=database`,
-	});
-
-	replicationService.on("data", async (_, log: Wal2Json.Output) => {
+const outboxReplication = startReplication({
+	connectionString,
+	slotName,
+	onChange: async (log: Wal2Json.Output) => {
 		const outboxRecords = filterChanges(log);
 		await Promise.all(outboxRecords.map(processOutboxRecord));
-	});
+	},
+});
 
-	await replicationService.subscribe(plugin, slotName);
-};
-
-startReplication().catch((error) => logger.error({ message: "Error starting replication", error }));
+outboxReplication.catch((error) => logger.error({ message: "Error starting replication", error }));
