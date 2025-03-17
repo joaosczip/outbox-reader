@@ -3,13 +3,13 @@ import { jetstream } from "@nats-io/jetstream";
 import { backOff } from "exponential-backoff";
 
 import { OutboxRecord } from "./models/outbox-record";
-import { RetryCallback, RetryConfig } from "./types";
+import { Publisher, RetryCallback, RetryConfig } from "./types";
 import { JitterType } from "exponential-backoff/dist/options";
 import { Logger } from "./logger";
 
-export class NATSPublisher {
+export class NATSPublisher implements Publisher {
 	private connection: NatsConnection | null = null;
-	private retryConfig: RetryConfig;
+	readonly retryConfig: RetryConfig;
 	private logger: Logger;
 
 	constructor({ retryConfig, logger }: { retryConfig: RetryConfig; logger: Logger }) {
