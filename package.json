@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@nats-io/jetstream": "^3.0.0-38",
+    "@paralleldrive/cuid2": "^2.2.2",
     "dotenv-config": "^0.1.1",
     "exponential-backoff": "^3.1.2",
     "luxon": "^3.5.0",

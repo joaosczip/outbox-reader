@@ -731,6 +731,11 @@
   resolved "https://registry.npmjs.org/@nats-io/nuid/-/nuid-2.0.3.tgz#3afe66825dcb2921386d9a43ba1175a2e36d528c"
   integrity sha512-TpA3HEBna/qMVudy+3HZr5M3mo/L1JPofpVT4t0HkFGkz2Cn9wrlrQC8tvR8Md5Oa9//GtGG26eN0qEWF5Vqew==
 
+"@noble/hashes@^1.1.5":
+  version "1.7.1"
+  resolved "https://registry.npmjs.org/@noble/hashes/-/hashes-1.7.1.tgz#5738f6d765710921e7a751e00c20ae091ed8db0f"
+  integrity sha512-B8XBPsn4vT/KJAGqDzbwztd+6Yte3P4V7iafm24bxgDe/mlRuK6xmWPuCNrKt2vDafZ8MfJLlchDG/vYafQEjQ==
+
 "@nodelib/fs.scandir@2.1.5":
   version "2.1.5"
   resolved "https://registry.npmjs.org/@nodelib/fs.scandir/-/fs.scandir-2.1.5.tgz#7619c2eb21b25483f6d167548b4cfd5a7488c3d5"
@@ -751,6 +756,13 @@
   dependencies:
     "@nodelib/fs.scandir" "2.1.5"
     fastq "^1.6.0"
+
+"@paralleldrive/cuid2@^2.2.2":
+  version "2.2.2"
+  resolved "https://registry.npmjs.org/@paralleldrive/cuid2/-/cuid2-2.2.2.tgz#7f91364d53b89e2c9cb9e02e8dd0f129e834455f"
+  integrity sha512-ZOBkgDwEdoYVlSeRbYYXs0S9MejQofiVYoTbKzy/6GQa39/q5tQU2IX46+shYnUkpEl3wc+J6wRlar7r2EK2xA==
+  dependencies:
+    "@noble/hashes" "^1.1.5"
 
 "@pkgr/core@^0.1.0":
   version "0.1.1"
