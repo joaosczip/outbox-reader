@@ -1,16 +1,25 @@
 import "dotenv/config";
 
-import { Logger } from "shared/logger";
-import { outboxRepositoryFactory } from "../factories";
+import { Logger } from "../logger";
+import { OutboxRepository } from "../outbox-repository";
+import { pool } from "../db";
 
-const prismaRepository = outboxRepositoryFactory();
+const outboxRepository = new OutboxRepository({
+	pool,
+	retryConfig: {
+		numOfAttempts: 3,
+		startingDelayInMs: 1000,
+		maxDelayInMs: 5000,
+		jitter: "full",
+	},
+});
 const logger = new Logger("outbox-reader:reprocess-failed-events");
 
 const run = async () => {
 	logger.info({
 		message: "Starting reprocessing failed events",
 	});
-	const failedEvents = await prismaRepository.findFailedEvents();
+	const failedEvents = await outboxRepository.findFailedEvents();
 
 	if (!failedEvents.length) {
 		logger.info({
@@ -23,7 +32,7 @@ const run = async () => {
 		message: `Found ${failedEvents.length} failed events`,
 	});
 
-	await prismaRepository.$transaction(async (tx) => {
+	await outboxRepository.onTransaction(async (tx) => {
 		await Promise.all(
 			failedEvents.map(async (event) => {
 				logger.info({
@@ -36,20 +45,13 @@ const run = async () => {
 					},
 				});
 
-				await tx.outbox.delete({
-					where: {
-						id: event.id,
-						status: "FAILED",
-					},
-				});
+				await tx.delete(event.id, "FAILED");
 
-				await tx.outbox.create({
-					data: {
-						...event,
-						payload: event.payload as any,
-						status: "PENDING",
-						attempts: event.attempts,
-					},
+				await tx.create({
+					...event,
+					payload: event.payload as any,
+					status: "PENDING",
+					attempts: event.attempts,
 				});
 
 				logger.info({

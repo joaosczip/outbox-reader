@@ -1,6 +1,7 @@
-import { Pool } from "pg";
+import { Pool, PoolClient } from "pg";
 import { backOff } from "exponential-backoff";
 import { DateTime } from "luxon";
+import { createId } from "@paralleldrive/cuid2";
 
 import { RetryCallback, RetryConfig } from "./types";
 import { JitterType } from "exponential-backoff/dist/options";
@@ -13,15 +14,31 @@ type UpdateOutboxRecordParams = {
 	retry: RetryCallback;
 };
 
+type CreateOutboxRecordParams = {
+	id?: string;
+	aggregateId: string;
+	aggregateType: string;
+	eventType: string;
+	payload: unknown;
+	sequenceNumber: number;
+	status: string;
+	attempts?: number;
+};
+
 export class OutboxRepository {
-	constructor(
-		private pool: Pool,
-		private retryConfig: RetryConfig,
-	) {}
+	private pool: Pool;
+	private retryConfig: RetryConfig;
+
+	constructor({ pool, retryConfig }: { pool: Pool; retryConfig: RetryConfig }) {
+		this.pool = pool;
+		this.retryConfig = retryConfig;
+	}
 
 	async findUnprocessedById(id: string) {
 		const query = `
-			SELECT * FROM outbox
+			SELECT id, aggregate_id, aggregate_type, event_type, payload, sequence_number, 
+			       created_at, processed_at, status, attempts 
+			FROM outbox
 			WHERE id = $1 AND status IN ('PENDING', 'FAILED')
 		`;
 		const result = await this.pool.query(query, [id]);
@@ -30,7 +47,9 @@ export class OutboxRepository {
 
 	async findFailedEvents() {
 		const query = `
-			SELECT * FROM outbox
+			SELECT id, aggregate_id, aggregate_type, event_type, payload, sequence_number, 
+			       created_at, processed_at, status, attempts 
+			FROM outbox
 			WHERE status = 'FAILED'
 		`;
 		const result = await this.pool.query(query);
@@ -39,7 +58,9 @@ export class OutboxRepository {
 
 	async findRecentPendingEvents(minutes = 10) {
 		const query = `
-			SELECT * FROM outbox
+			SELECT id, aggregate_id, aggregate_type, event_type, payload, sequence_number, 
+			       created_at, processed_at, status, attempts 
+			FROM outbox
 			WHERE created_at >= $1 AND status = 'PENDING'
 			ORDER BY created_at ASC
 		`;
@@ -50,7 +71,9 @@ export class OutboxRepository {
 
 	async findLastProcessedEvent(): Promise<OutboxRecord | null> {
 		const query = `
-			SELECT * FROM outbox
+			SELECT id, aggregate_id, aggregate_type, event_type, payload, sequence_number, 
+			       created_at, processed_at, status, attempts 
+			FROM outbox
 			WHERE status = 'PROCESSED'
 			ORDER BY sequence_number DESC
 			LIMIT 1
@@ -67,6 +90,38 @@ export class OutboxRepository {
 					processedAt: lastProcessedEvent.processed_at?.toISOString(),
 				})
 			: null;
+	}
+
+	async create(params: CreateOutboxRecordParams): Promise<string> {
+		const {
+			id = createId(),
+			aggregateId,
+			aggregateType,
+			eventType,
+			payload,
+			sequenceNumber,
+			status,
+			attempts = 0,
+		} = params;
+
+		const query = `
+			INSERT INTO outbox (
+				id, aggregate_id, aggregate_type, event_type, 
+				payload, sequence_number, status, attempts, 
+				created_at
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+			RETURNING id
+		`;
+
+		const values = [id, aggregateId, aggregateType, eventType, payload, sequenceNumber, status, attempts];
+		const result = await this.pool.query(query, values);
+
+		return result.rows[0].id;
+	}
+
+	async delete(id: string, status: string): Promise<void> {
+		const query = `DELETE FROM outbox WHERE id = $1 AND status = $2`;
+		await this.pool.query(query, [id, status]);
 	}
 
 	async markAsProcessed({ id, sequenceNumber, attempts, retry }: UpdateOutboxRecordParams): Promise<void> {
@@ -111,5 +166,46 @@ export class OutboxRepository {
 				numOfAttempts: this.retryConfig.numOfAttempts,
 			},
 		);
+	}
+
+	async markManyAsFailed({ ids }: { ids: string[] }): Promise<void> {
+		const query = `
+			UPDATE outbox 
+			SET status = 'FAILED', 
+				attempts = attempts + 1
+			WHERE id = $1
+		`;
+
+		await Promise.all(
+			ids.map(async (id) => {
+				await this.pool.query(query, [id]);
+			}),
+		);
+	}
+
+	async onTransaction(callback: (tx: OutboxRepository) => Promise<void>) {
+		const client = await this.pool.connect();
+
+		try {
+			await client.query("BEGIN");
+
+			const transaction = new Proxy(this, {
+				get(target, prop) {
+					if (prop === "pool") {
+						return client;
+					}
+
+					return Reflect.get(target, prop);
+				},
+			});
+
+			await callback(transaction);
+			await client.query("COMMIT");
+		} catch (error) {
+			await client.query("ROLLBACK");
+			throw error;
+		} finally {
+			client.release();
+		}
 	}
 }

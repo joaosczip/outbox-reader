@@ -6,7 +6,7 @@ type LogData = {
 	extra?: Record<string, unknown>;
 };
 
-class Logger {
+export class Logger {
 	private logger: pino.Logger;
 
 	constructor(context?: string) {
@@ -39,6 +39,3 @@ class Logger {
 		this.logger.debug({ message, traceId, ...extra });
 	}
 }
-
-const logger = new Logger("outbox-reader");
-export { logger };

@@ -1,15 +1,24 @@
 import "dotenv/config";
 import { connect, NatsError } from "nats";
-import { outboxRepositoryFactory } from "../factories";
-import { Logger } from "shared/logger";
 import { OutboxRecord } from "../models/outbox-record";
+import { Logger } from "../logger";
+import { OutboxRepository } from "../outbox-repository";
+import { pool } from "../db";
 
-const prismaRepository = outboxRepositoryFactory();
 const logger = new Logger("outbox-reader:check-pending-events");
+const outboxRepository = new OutboxRepository({
+	pool,
+	retryConfig: {
+		numOfAttempts: 3,
+		startingDelayInMs: 1000,
+		maxDelayInMs: 5000,
+		jitter: "full",
+	},
+});
 
 export const run = async () => {
 	const minutes = 10;
-	const pendingEvens = await prismaRepository.findRecentPendingEvents(minutes);
+	const pendingEvens = await outboxRepository.findRecentPendingEvents(minutes);
 
 	if (!pendingEvens.length) {
 		logger.info({
@@ -31,7 +40,7 @@ export const run = async () => {
 
 	const jsm = await nc.jetstreamManager();
 
-	const lastProcessedEvent = await prismaRepository.findLastProcessedEvent();
+	const lastProcessedEvent = await outboxRepository.findLastProcessedEvent();
 	let lastSequenceNumber = 0;
 
 	let eventsToBeMarkedAsFailed: OutboxRecord[] = [];
@@ -75,7 +84,7 @@ export const run = async () => {
 				},
 			});
 
-			await prismaRepository.markAsProcessed({
+			await outboxRepository.markAsProcessed({
 				id: event.id as string,
 				sequenceNumber: publishedMessage.seq,
 				attempts: event.attempts,
@@ -126,15 +135,10 @@ export const run = async () => {
 			},
 		});
 
-		await prismaRepository.outbox.updateMany({
-			where: {
-				id: {
-					in: eventsToBeMarkedAsFailed.map((e) => e.id) as string[],
-				},
-			},
-			data: {
-				status: "FAILED",
-			},
+		await outboxRepository.onTransaction(async (tx) => {
+			await tx.markManyAsFailed({
+				ids: eventsToBeMarkedAsFailed.map((e) => e.id),
+			});
 		});
 
 		logger.info({

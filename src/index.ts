@@ -4,19 +4,26 @@ import { LogicalReplicationService, Wal2Json, Wal2JsonPlugin } from "pg-logical-
 
 import { OutboxConstructor, OutboxRecord } from "./models/outbox-record";
 import { NATSPublisher } from "./nats-publisher";
-import { logger } from "./logger";
+import { Logger } from "./logger";
 import { config, dbWriteRetryConfig, natsPublisherRetryConfig } from "./config";
 import { OutboxRepository } from "./outbox-repository";
 
+const logger = new Logger("outbox-reader");
 const pool = new Pool({ connectionString: config.connectionString });
-const outboxRepository = new OutboxRepository(pool, dbWriteRetryConfig);
-const natsPublisher = new NATSPublisher(natsPublisherRetryConfig);
+const outboxRepository = new OutboxRepository({
+	pool,
+	retryConfig: dbWriteRetryConfig,
+});
+const natsPublisher = new NATSPublisher({
+	logger,
+	retryConfig: natsPublisherRetryConfig,
+});
 
 const filterChanges = (log: Wal2Json.Output) => {
 	const onlyInsertsOnOutbox = ({ table, columnnames, kind }: Wal2Json.Change) =>
 		table === "outbox" && kind === "insert" && columnnames?.length;
 
-	return log.change.filter(onlyInsertsOnOutbox).map(({ columnnames, columnvalues }) => {
+	const insertToOutboxEntity = ({ columnnames, columnvalues }: Wal2Json.Change) => {
 		const columnNamesMapping: Record<string, string> = {
 			aggregate_id: "aggregateId",
 			aggregate_type: "aggregateType",
@@ -27,7 +34,7 @@ const filterChanges = (log: Wal2Json.Output) => {
 
 		const outboxAttributes = columnnames.reduce((acc: Partial<OutboxConstructor>, dbColumn: string, index) => {
 			const outboxColumn = columnNamesMapping[dbColumn as keyof OutboxConstructor] || dbColumn;
-			acc[outboxColumn as keyof OutboxConstructor] = columnvalues[index];
+			(acc as any)[outboxColumn as keyof OutboxConstructor] = columnvalues[index];
 			return acc;
 		}, {} as Partial<OutboxConstructor>);
 
@@ -42,7 +49,9 @@ const filterChanges = (log: Wal2Json.Output) => {
 		});
 
 		return new OutboxRecord(outboxAttributes as OutboxConstructor);
-	});
+	};
+
+	return log.change.filter(onlyInsertsOnOutbox).map(insertToOutboxEntity);
 };
 
 const processOutboxRecord = async (record: OutboxRecord) => {
