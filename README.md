@@ -23,54 +23,50 @@ Outbox Reader captures database changes via PostgreSQL's logical replication and
 
 ## Installation
 
-```bash
-# Clone the repository
-git clone https://github.com/yourusername/outbox-reader.git
-cd outbox-reader
-
-# Install dependencies
-npm install
-
-# Setup database schema
-npm run db:generate
-npm run db:migrate:dev
-```
-
-## Configuration
-
-Create a `.env` file in the project root:
-
-```bash
-# PostgreSQL connection
-DATABASE_URL=postgresql://username:password@localhost:5432/mydatabase
-
-# NATS connection
-NATS_URL=nats://localhost:4222
-NATS_STREAM=outbox-events
-
-# Replication configuration
-REPLICATION_SLOT=outbox_slot
-PUBLICATION_NAME=outbox_publication
-OUTBOX_TABLE=outbox
-
-# Processing configuration
-BATCH_SIZE=100
-RETRY_MAX_ATTEMPTS=10
-RETRY_INITIAL_DELAY_MS=100
-```
+TBD
 
 ## Usage
 
-### Starting the service
+### Requirements and configuration
+
+Before start, you must have the following tools configured on your machine:
+
+- NATS Server (^2.9.0)
+- PostgreSQL database (^17.4.0)
+
+In the case you don't have it, you may use the `docker-compose.yml` from this repository to start both services:
+
+```sh
+$ docker compose up -d
+```
+
+Once the tools are up and running, create a `.env` file based on the `.env.example` and fill it with the from the services you created.
+
+```sh
+$ cp .env.example .env
+```
+
+### Create the outbox table within your database
+
+```sql
+CREATE TABLE outbox (
+    id VARCHAR(255) PRIMARY KEY,
+    aggregate_id VARCHAR(255) NOT NULL,
+    aggregate_type VARCHAR(255) NOT NULL,
+    event_type VARCHAR(255) NOT NULL,
+    payload JSONB NOT NULL,
+    sequence_number BIGINT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    processed_at TIMESTAMP NULL,
+    status VARCHAR(50) NOT NULL DEFAULT 'PENDING',
+    attempts INTEGER NOT NULL DEFAULT 0
+);
+```
+
+### Start the service
 
 ```bash
 npm run start
-```
-
-For development with automatic restart:
-
-```bash
-npm run dev
 ```
 
 ### Creating outbox entries
@@ -78,8 +74,8 @@ npm run dev
 Insert records into your outbox table with the necessary event data:
 
 ```sql
-INSERT INTO outbox (event_type, payload, aggregate_type, aggregate_id)
-VALUES ('user_created', '{"id": 123, "name": "John Doe"}', 'user', '123');
+INSERT INTO outbox (id, event_type, payload, aggregate_type, aggregate_id)
+VALUES ('my_unique_id', 'user_created', '{"id": 123, "name": "John Doe"}'::jsonb, 'user', '123');
 ```
 
 The outbox reader will automatically detect these changes and publish them to the configured NATS JetStream.
@@ -92,7 +88,6 @@ The Outbox Reader consists of the following components:
 2. **Event Processor** - Transforms database changes into domain events
 3. **NATS Publisher** - Publishes events to NATS JetStream
 4. **Retry Manager** - Handles failed events with exponential backoff
-5. **Health Monitor** - Reports on system health and pending events
 
 ```
 ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
@@ -103,21 +98,11 @@ The Outbox Reader consists of the following components:
 
 ## Monitoring
 
-The service exposes metrics on port 3000 by default:
-
-- `/health` - Health check endpoint
-- `/metrics` - Prometheus metrics
-- `/pending` - Count of pending events
+TBD
 
 ## Testing
 
-```bash
-# Run unit tests
-npm run test
-
-# Run integration tests
-npm run test:integration
-```
+TBD
 
 ## Contributing
 
@@ -127,6 +112,6 @@ npm run test:integration
 4. Push to the branch (`git push origin feature/amazing-feature`)
 5. Open a Pull Request
 
-## License
+## Roadmap
 
-Distributed under the MIT License. See `LICENSE` for more information.
+This project is under development and constantly improving, check our [ROADMAP](./ROADMAP.md) to see the next features and enhancements.

@@ -1,4 +1,4 @@
-import { Pool, PoolClient } from "pg";
+import { Pool } from "pg";
 import { backOff } from "exponential-backoff";
 import { DateTime } from "luxon";
 import { createId } from "@paralleldrive/cuid2";
