@@ -48,6 +48,58 @@ $ cp .env.example .env
 
 ### Create the outbox table within your database
 
+#### Option 1: Using Prisma (Recommended)
+
+If you're using Prisma in your application, you can automatically generate the outbox schema and migration:
+
+```bash
+# Generate the outbox schema and migration with default settings
+npx outbox-schema
+
+# Or use custom configuration
+npx outbox-schema --schema-path ./database/schema.prisma --model-name OutboxEvent
+
+# Generate a configuration file first
+npx outbox-schema generate-config
+# Then use it
+npx outbox-schema --config ./outbox-config.json
+
+# Generate config with custom output path
+npx outbox-schema generate-config --output ./my-custom-config.json
+```
+
+**Configuration Options:**
+
+- `--schema-path, -s`: Path to your schema.prisma file (default: `./prisma/schema.prisma`)
+- `--model-name, -m`: Name of the outbox model (default: `OutboxRecord`)
+- `--table-name, -t`: Database table name (default: `outbox`)
+- `--migration-name`: Migration name (default: `add_outbox_table`)
+- `--config, -c`: Path to configuration file
+- `--skip-migration`: Generate schema without migration
+
+**Commands:**
+
+- `generate-config`: Create a sample configuration file
+  - `--output, -o`: Output path for the config file (default: `./outbox-config.json`)
+
+**Configuration File Example:**
+
+```json
+{
+	"schemaPath": "./prisma/schema.prisma",
+	"modelName": "OutboxRecord",
+	"tableName": "outbox",
+	"generateMigration": true,
+	"migrationName": "add_outbox_table",
+	"customFields": {
+		"tenantId": "String?",
+		"version": "Int @default(1)"
+	}
+}
+```
+
+#### Option 2: Manual SQL Table Creation
+
 ```sql
 CREATE TABLE outbox (
     id VARCHAR(255) PRIMARY KEY,

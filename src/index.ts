@@ -38,3 +38,8 @@ const outboxReplication = startReplication({
 });
 
 outboxReplication.catch((error) => logger.error({ message: "Error starting replication", error }));
+
+// Export utilities for programmatic use
+export { PrismaSchemaGenerator } from "./services/prisma-schema-generator";
+export { generateOutboxSchema } from "./cli/generate-schema";
+export * from "./types/schema-config";
