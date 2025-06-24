@@ -80,7 +80,7 @@ npx outbox-schema generate-config --output ./my-custom-config.json
 **Commands:**
 
 - `generate-config`: Create a sample configuration file
-  - `--output, -o`: Output path for the config file (default: `./outbox-config.json`)
+    - `--output, -o`: Output path for the config file (default: `./outbox-config.json`)
 
 **Configuration File Example:**
 
@@ -114,6 +114,40 @@ CREATE TABLE outbox (
     attempts INTEGER NOT NULL DEFAULT 0
 );
 ```
+
+### Configuration
+
+The outbox reader uses environment variables for configuration. Copy the `.env.example` file and adjust the values:
+
+```bash
+cp .env.example .env
+```
+
+#### Required Configuration
+
+- `DATABASE_URL`: PostgreSQL connection string with replication enabled
+- `REPLICATION_SLOT_NAME`: Name of the PostgreSQL replication slot
+
+#### NATS Configuration
+
+The following environment variables configure the NATS connection:
+
+- `NATS_SERVERS`: NATS server URLs (comma-separated for multiple servers)
+    - Default: `nats://localhost:4222`
+    - Example: `nats://server1:4222,nats://server2:4222`
+- `NATS_CONNECTION_NAME`: Connection name for identification in server logs
+    - Default: `outbox-reader`
+
+**Optional NATS Settings:**
+
+- `NATS_USER`: Username for authentication
+- `NATS_PASSWORD`: Password for authentication
+- `NATS_TOKEN`: Token for authentication
+- `NATS_MAX_RECONNECT_ATTEMPTS`: Maximum reconnection attempts (-1 for unlimited)
+- `NATS_RECONNECT_TIME_WAIT`: Time between reconnection attempts in milliseconds
+- `NATS_TIMEOUT`: Connection timeout in milliseconds
+- `NATS_VERBOSE`: Enable verbose logging (true/false)
+- `NATS_PEDANTIC`: Enable pedantic mode (true/false)
 
 ### Start the service
 

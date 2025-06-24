@@ -1,7 +1,9 @@
 {
 	"name": "outbox-reader",
 	"version": "1.0.0",
-	"description": "",
+	"description": "Outbox pattern implementation with PostgreSQL WAL and NATS JetStream",
+	"main": "dist/index.js",
+	"types": "dist/index.d.ts",
 	"author": "joao.sczip@hotmail.com",
 	"private": true,
 	"license": "UNLICENSED",
@@ -10,7 +12,7 @@
 	},
 	"scripts": {
 		"build": "rm -rf dist && tsc -b",
-		"start": "tsx --watch src/index.ts",
+		"start": "tsx --watch src/app.ts",
 		"reprocess-failed-events": "tsx src/cronjobs/reprocess-failed-events.ts",
 		"check-pending-events": "tsx src/cronjobs/check-pending-events.ts",
 		"db:generate": "npx prisma generate --schema=./database/prisma/schema.prisma",

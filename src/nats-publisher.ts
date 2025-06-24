@@ -3,7 +3,7 @@ import { jetstream } from "@nats-io/jetstream";
 import { backOff } from "exponential-backoff";
 
 import { OutboxRecord } from "./models/outbox-record";
-import { Publisher, RetryCallback, RetryConfig } from "./types";
+import { Publisher, RetryCallback, RetryConfig, NATSConnectionConfig } from "./types";
 import { JitterType } from "exponential-backoff/dist/options";
 import { Logger } from "./logger";
 
@@ -11,16 +11,36 @@ export class NATSPublisher implements Publisher {
 	private connection: NatsConnection | null = null;
 	readonly retryConfig: RetryConfig;
 	private logger: Logger;
+	private connectionConfig: NATSConnectionConfig;
 
-	constructor({ retryConfig, logger }: { retryConfig: RetryConfig; logger: Logger }) {
+	constructor({
+		retryConfig,
+		logger,
+		connectionConfig,
+	}: {
+		retryConfig: RetryConfig;
+		logger: Logger;
+		connectionConfig: NATSConnectionConfig;
+	}) {
 		this.retryConfig = retryConfig;
 		this.logger = logger;
+		this.connectionConfig = connectionConfig;
 	}
 
 	async publish({ record, retry }: { record: OutboxRecord; retry: RetryCallback }): Promise<number> {
 		if (!this.connection) {
-			this.connection = await connect({
-				servers: ["nats://localhost:4222"],
+			this.logger.info({
+				message: "Establishing NATS connection",
+				extra: {
+					servers: this.connectionConfig.servers,
+					name: this.connectionConfig.name,
+				},
+			});
+
+			this.connection = await connect(this.connectionConfig);
+
+			this.logger.info({
+				message: "NATS connection established successfully",
 			});
 		}
 
@@ -69,5 +89,30 @@ export class NATSPublisher implements Publisher {
 			});
 			throw error;
 		}
+	}
+
+	/**
+	 * Gracefully close the NATS connection
+	 */
+	async close(): Promise<void> {
+		if (this.connection) {
+			this.logger.info({
+				message: "Closing NATS connection",
+			});
+
+			await this.connection.close();
+			this.connection = null;
+
+			this.logger.info({
+				message: "NATS connection closed",
+			});
+		}
+	}
+
+	/**
+	 * Check if the NATS connection is established
+	 */
+	isConnected(): boolean {
+		return this.connection !== null && !this.connection.isClosed();
 	}
 }
