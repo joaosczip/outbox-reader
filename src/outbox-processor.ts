@@ -93,6 +93,7 @@ export class OutboxProcessor {
 				event_type: "eventType",
 				created_at: "createdAt",
 				processed_at: "processedAt",
+				sequence_number: "sequenceNumber",
 			};
 
 			const outboxAttributes = columnnames.reduce((acc: Partial<OutboxConstructor>, dbColumn: string, index) => {
