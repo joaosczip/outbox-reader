@@ -8,17 +8,17 @@
 	"private": true,
 	"license": "UNLICENSED",
 	"engines": {
-		"node": "^23.7.0"
+		"bun": ">=1.2.0"
 	},
 	"scripts": {
 		"build": "rm -rf dist && tsc -b",
-		"start": "tsx --watch src/app.ts",
-		"reprocess-failed-events": "tsx src/cronjobs/reprocess-failed-events.ts",
-		"check-pending-events": "tsx src/cronjobs/check-pending-events.ts",
+		"start": "bun --watch src/app.ts",
+		"reprocess-failed-events": "bun src/cronjobs/reprocess-failed-events.ts",
+		"check-pending-events": "bun src/cronjobs/check-pending-events.ts",
 		"db:generate": "npx prisma generate --schema=./database/prisma/schema.prisma",
 		"db:migrate:dev": "npx prisma migrate dev --schema=./database/prisma/schema.prisma",
-		"schema:generate": "tsx src/cli/generate-schema.ts",
-		"test": "jest"
+		"schema:generate": "bun src/cli/generate-schema.ts",
+		"test": "bun test"
 	},
 	"bin": {
 		"outbox-schema": "./bin/outbox-schema.js"
@@ -36,8 +36,8 @@
 		"pino": "^9.6.0"
 	},
 	"devDependencies": {
+		"@types/bun": "latest",
 		"@types/commander": "^2.12.0",
-		"@types/jest": "^29.5.2",
 		"@types/luxon": "^3.4.2",
 		"@types/node": "^20.3.1",
 		"@types/pg": "^8.11.11",
@@ -46,13 +46,7 @@
 		"eslint": "^8.0.0",
 		"eslint-config-prettier": "^9.0.0",
 		"eslint-plugin-prettier": "^5.0.0",
-		"jest": "^29.5.0",
 		"prettier": "^3.0.0",
-		"ts-jest": "^29.1.0",
-		"ts-loader": "^9.4.3",
-		"ts-node": "^10.9.1",
-		"tsconfig-paths": "^4.2.0",
-		"tsx": "^4.19.2",
 		"typescript": "^5.1.3"
 	}
 }
