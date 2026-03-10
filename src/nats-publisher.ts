@@ -1,11 +1,11 @@
-import { NatsConnection, connect } from "nats";
 import { jetstream } from "@nats-io/jetstream";
 import { backOff } from "exponential-backoff";
+import { type NatsConnection, connect } from "nats";
 
-import { OutboxRecord } from "./models/outbox-record";
-import { Publisher, RetryCallback, RetryConfig, NATSConnectionConfig } from "./types";
-import { JitterType } from "exponential-backoff/dist/options";
-import { Logger } from "./logger";
+import type { JitterType } from "exponential-backoff/dist/options";
+import type { Logger } from "./logger";
+import type { OutboxRecord } from "./models/outbox-record";
+import type { NATSConnectionConfig, Publisher, RetryCallback, RetryConfig } from "./types";
 
 export class NATSPublisher implements Publisher {
 	private connection: NatsConnection | null = null;

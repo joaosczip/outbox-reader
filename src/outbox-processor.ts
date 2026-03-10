@@ -1,8 +1,8 @@
-import { Wal2Json } from "pg-logical-replication";
-import { OutboxConstructor, OutboxRecord } from "./models/outbox-record";
-import { OutboxRepository } from "./outbox-repository";
-import { Logger } from "./logger";
-import { Publisher } from "./types";
+import type { Wal2Json } from "pg-logical-replication";
+import type { Logger } from "./logger";
+import { type OutboxConstructor, OutboxRecord } from "./models/outbox-record";
+import type { OutboxRepository } from "./outbox-repository";
+import type { Publisher } from "./types";
 
 export class OutboxProcessor {
 	private outboxRepository: OutboxRepository;
@@ -43,7 +43,7 @@ export class OutboxProcessor {
 				record: outbox as OutboxRecord,
 				retry: (e, attempts) => {
 					this.logger.error({
-						message: `Error publishing NATS message`,
+						message: "Error publishing NATS message",
 						extra: { recordId: record.id, attempts },
 						error: e,
 					});
@@ -96,11 +96,14 @@ export class OutboxProcessor {
 				sequence_number: "sequenceNumber",
 			};
 
-			const outboxAttributes = columnnames.reduce((acc: Partial<OutboxConstructor>, dbColumn: string, index) => {
-				const outboxColumn = columnNamesMapping[dbColumn as keyof OutboxConstructor] || dbColumn;
-				(acc as any)[outboxColumn as keyof OutboxConstructor] = columnvalues[index];
-				return acc;
-			}, {} as Partial<OutboxConstructor>);
+			const outboxAttributes = columnnames.reduce(
+				(acc: Partial<OutboxConstructor>, dbColumn: string, index) => {
+					const outboxColumn = columnNamesMapping[dbColumn as keyof OutboxConstructor] || dbColumn;
+					(acc as Record<string, unknown>)[outboxColumn] = columnvalues[index];
+					return acc;
+				},
+				{} as Partial<OutboxConstructor>,
+			);
 
 			this.logger.info({
 				message: "Received replication data for an outbox record",

@@ -1,4 +1,4 @@
-import { RetryConfig, NATSConnectionConfig } from "./types";
+import type { NATSConnectionConfig, RetryConfig } from "./types";
 
 export const getEnvOrThrow = (key: string): string => {
 	const value = process.env[key];
@@ -24,10 +24,12 @@ export const natsConnectionConfig: NATSConnectionConfig = {
 	pass: process.env.NATS_PASSWORD,
 	token: process.env.NATS_TOKEN,
 	maxReconnectAttempts: process.env.NATS_MAX_RECONNECT_ATTEMPTS
-		? parseInt(process.env.NATS_MAX_RECONNECT_ATTEMPTS)
+		? Number.parseInt(process.env.NATS_MAX_RECONNECT_ATTEMPTS)
 		: -1,
-	reconnectTimeWait: process.env.NATS_RECONNECT_TIME_WAIT ? parseInt(process.env.NATS_RECONNECT_TIME_WAIT) : 2000,
-	timeout: process.env.NATS_TIMEOUT ? parseInt(process.env.NATS_TIMEOUT) : 20000,
+	reconnectTimeWait: process.env.NATS_RECONNECT_TIME_WAIT
+		? Number.parseInt(process.env.NATS_RECONNECT_TIME_WAIT)
+		: 2000,
+	timeout: process.env.NATS_TIMEOUT ? Number.parseInt(process.env.NATS_TIMEOUT) : 20000,
 	verbose: process.env.NATS_VERBOSE === "true",
 	pedantic: process.env.NATS_PEDANTIC === "true",
 };

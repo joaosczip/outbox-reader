@@ -18,6 +18,7 @@
 		"db:generate": "npx prisma generate --schema=./database/prisma/schema.prisma",
 		"db:migrate:dev": "npx prisma migrate dev --schema=./database/prisma/schema.prisma",
 		"schema:generate": "bun src/cli/generate-schema.ts",
+		"lint": "biome check src/",
 		"test": "bun test"
 	},
 	"bin": {
@@ -41,12 +42,7 @@
 		"@types/luxon": "^3.4.2",
 		"@types/node": "^20.3.1",
 		"@types/pg": "^8.11.11",
-		"@typescript-eslint/eslint-plugin": "^8.0.0",
-		"@typescript-eslint/parser": "^8.0.0",
-		"eslint": "^8.0.0",
-		"eslint-config-prettier": "^9.0.0",
-		"eslint-plugin-prettier": "^5.0.0",
-		"prettier": "^3.0.0",
+		"@biomejs/biome": "^1.9.4",
 		"typescript": "^5.1.3"
 	}
 }

@@ -1,5 +1,5 @@
-import { OutboxRecord } from "../models/outbox-record";
-import { RetryCallback, RetryConfig } from "./retry-config";
+import type { OutboxRecord } from "../models/outbox-record";
+import type { RetryCallback, RetryConfig } from "./retry-config";
 
 export interface Publisher {
 	get retryConfig(): RetryConfig;

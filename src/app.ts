@@ -1,13 +1,13 @@
 import "dotenv/config";
 import { Pool } from "pg";
-import { Wal2Json } from "pg-logical-replication";
+import type { Wal2Json } from "pg-logical-replication";
 
-import { NATSPublisher } from "./nats-publisher";
+import { config, dbWriteRetryConfig, natsConnectionConfig, natsPublisherRetryConfig } from "./config";
 import { Logger } from "./logger";
-import { config, dbWriteRetryConfig, natsPublisherRetryConfig, natsConnectionConfig } from "./config";
+import { NATSPublisher } from "./nats-publisher";
+import { OutboxProcessor } from "./outbox-processor";
 import { OutboxRepository } from "./outbox-repository";
 import { startReplication } from "./replication";
-import { OutboxProcessor } from "./outbox-processor";
 
 const logger = new Logger("outbox-reader");
 const pool = new Pool({ connectionString: config.connectionString });

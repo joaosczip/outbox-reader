@@ -1,4 +1,4 @@
-import { LogicalReplicationService, Wal2Json, Wal2JsonPlugin } from "pg-logical-replication";
+import { LogicalReplicationService, type Wal2Json, Wal2JsonPlugin } from "pg-logical-replication";
 
 type StartReplicationParams = {
 	connectionString: string;

@@ -1,8 +1,8 @@
 import "dotenv/config";
 
+import { pool } from "../db";
 import { Logger } from "../logger";
 import { OutboxRepository } from "../outbox-repository";
-import { pool } from "../db";
 
 const outboxRepository = new OutboxRepository({
 	pool,
@@ -49,13 +49,13 @@ const run = async () => {
 
 				await tx.create({
 					...event,
-					payload: event.payload as any,
+					payload: event.payload,
 					status: "PENDING",
 					attempts: event.attempts,
 				});
 
 				logger.info({
-					message: `Failed event reprocessed`,
+					message: "Failed event reprocessed",
 					extra: {
 						id: event.id,
 						aggregateId: event.aggregateId,

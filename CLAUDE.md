@@ -18,7 +18,7 @@ bun test test/outbox-processor.test.ts
 bun run build
 
 # Lint
-bunx eslint src/**/*.ts
+bun run lint
 
 # Cronjobs (run manually or on a schedule)
 bun run reprocess-failed-events

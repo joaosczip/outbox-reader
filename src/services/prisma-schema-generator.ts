@@ -1,6 +1,6 @@
-import * as fs from "fs";
-import * as path from "path";
-import { SchemaGenerationConfig, OutboxSchemaGenerationOptions } from "../types/schema-config";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import type { OutboxSchemaGenerationOptions, SchemaGenerationConfig } from "../types/schema-config";
 
 export class PrismaSchemaGenerator {
 	private config: Required<SchemaGenerationConfig>;
@@ -112,12 +112,12 @@ datasource db {
 				return;
 			}
 
-			const updatedContent = existingContent + "\n" + outboxModel + "\n";
+			const updatedContent = `${existingContent}\n${outboxModel}\n`;
 			fs.writeFileSync(this.config.schemaPath, updatedContent);
 			console.log(`✅ Added ${this.config.modelName} model to existing schema at ${this.config.schemaPath}`);
 		} else {
 			// Create new schema file
-			const fullSchema = this.getBaseSchema() + outboxModel + "\n";
+			const fullSchema = `${this.getBaseSchema() + outboxModel}\n`;
 			fs.writeFileSync(this.config.schemaPath, fullSchema);
 			console.log(`✅ Created new schema file with ${this.config.modelName} model at ${this.config.schemaPath}`);
 		}
@@ -134,7 +134,7 @@ datasource db {
 
 		try {
 			// Use Prisma CLI to generate migration
-			const { execSync } = require("child_process");
+			const { execSync } = require("node:child_process");
 
 			const command = `npx prisma migrate dev --name ${this.config.migrationName} --schema=${this.config.schemaPath}`;
 
@@ -168,7 +168,7 @@ datasource db {
 	/**
 	 * Generate a sample configuration file
 	 */
-	static generateConfigFile(filePath: string = "./outbox-config.json"): void {
+	static generateConfigFile(filePath = "./outbox-config.json"): void {
 		const sampleConfig: SchemaGenerationConfig = {
 			schemaPath: "./prisma/schema.prisma",
 			modelName: "OutboxRecord",

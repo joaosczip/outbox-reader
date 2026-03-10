@@ -1,11 +1,11 @@
-import { Pool } from "pg";
+import { createId } from "@paralleldrive/cuid2";
 import { backOff } from "exponential-backoff";
 import { DateTime } from "luxon";
-import { createId } from "@paralleldrive/cuid2";
+import type { Pool } from "pg";
 
-import { RetryCallback, RetryConfig } from "./types";
-import { JitterType } from "exponential-backoff/dist/options";
+import type { JitterType } from "exponential-backoff/dist/options";
 import { OutboxRecord } from "./models/outbox-record";
+import type { RetryCallback, RetryConfig } from "./types";
 
 type UpdateOutboxRecordParams = {
 	id: string;
@@ -120,7 +120,7 @@ export class OutboxRepository {
 	}
 
 	async delete(id: string, status: string): Promise<void> {
-		const query = `DELETE FROM outbox WHERE id = $1 AND status = $2`;
+		const query = "DELETE FROM outbox WHERE id = $1 AND status = $2";
 		await this.pool.query(query, [id, status]);
 	}
 

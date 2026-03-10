@@ -2,7 +2,7 @@
 
 import { Command } from "commander";
 import { PrismaSchemaGenerator } from "../services/prisma-schema-generator";
-import { SchemaGenerationConfig } from "../types/schema-config";
+import type { SchemaGenerationConfig } from "../types/schema-config";
 
 const program = new Command();
 

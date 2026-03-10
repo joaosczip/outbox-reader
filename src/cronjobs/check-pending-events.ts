@@ -1,9 +1,9 @@
 import "dotenv/config";
-import { connect, NatsError } from "nats";
-import { OutboxRecord } from "../models/outbox-record";
-import { Logger } from "../logger";
-import { OutboxRepository } from "../outbox-repository";
+import { type NatsError, connect } from "nats";
 import { pool } from "../db";
+import { Logger } from "../logger";
+import type { OutboxRecord } from "../models/outbox-record";
+import { OutboxRepository } from "../outbox-repository";
 
 const logger = new Logger("outbox-reader:check-pending-events");
 const outboxRepository = new OutboxRepository({
