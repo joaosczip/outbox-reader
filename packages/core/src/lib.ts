@@ -1,8 +1,3 @@
-// Core library exports for programmatic use
-export { PrismaSchemaGenerator } from "./services/prisma-schema-generator";
-export { generateOutboxSchema } from "./cli/generate-schema";
-export * from "./types/schema-config";
-
 // Core components exports
 export { OutboxRepository } from "./outbox-repository";
 export { OutboxProcessor } from "./outbox-processor";

@@ -1,8 +1,8 @@
-import { OutboxProcessor } from "../src/outbox-processor";
 import { OutboxRecord, OutboxStatus } from "../src/models/outbox-record";
+import { OutboxProcessor } from "../src/outbox-processor";
+import { MockLogger } from "./mocks/mock-logger";
 import { MockOutboxRepository } from "./mocks/mock-outbox-repository";
 import { MockPublisher } from "./mocks/mock-publisher";
-import { MockLogger } from "./mocks/mock-logger";
 import { Wal2JsonTestHelper } from "./mocks/wal2json-helper";
 
 describe("OutboxProcessor", () => {

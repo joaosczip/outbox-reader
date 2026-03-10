@@ -1,5 +1,5 @@
-import { OutboxRecord } from "../../src/models/outbox-record";
-import { Publisher, RetryCallback } from "../../src/types";
+import type { OutboxRecord } from "../../src/models/outbox-record";
+import type { Publisher, RetryCallback } from "../../src/types";
 
 export class MockPublisher implements Publisher {
 	public retryConfig = {

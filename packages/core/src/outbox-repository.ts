@@ -49,8 +49,8 @@ export class OutboxRepository {
 
 	async findUnprocessedById(id: string): Promise<OutboxRow | null> {
 		const query = `
-			SELECT id, aggregate_id, aggregate_type, event_type, payload, sequence_number, 
-			       created_at, processed_at, status, attempts 
+			SELECT id, aggregate_id, aggregate_type, event_type, payload, sequence_number,
+			       created_at, processed_at, status, attempts
 			FROM outbox
 			WHERE id = $1 AND status IN ('PENDING', 'FAILED')
 		`;
@@ -60,8 +60,8 @@ export class OutboxRepository {
 
 	async findFailedEvents(): Promise<OutboxRow[]> {
 		const query = `
-			SELECT id, aggregate_id, aggregate_type, event_type, payload, sequence_number, 
-			       created_at, processed_at, status, attempts 
+			SELECT id, aggregate_id, aggregate_type, event_type, payload, sequence_number,
+			       created_at, processed_at, status, attempts
 			FROM outbox
 			WHERE status = 'FAILED'
 		`;
@@ -71,8 +71,8 @@ export class OutboxRepository {
 
 	async findRecentPendingEvents(minutes = 10): Promise<OutboxRow[]> {
 		const query = `
-			SELECT id, aggregate_id, aggregate_type, event_type, payload, sequence_number, 
-			       created_at, processed_at, status, attempts 
+			SELECT id, aggregate_id, aggregate_type, event_type, payload, sequence_number,
+			       created_at, processed_at, status, attempts
 			FROM outbox
 			WHERE created_at >= $1 AND status = 'PENDING'
 			ORDER BY created_at ASC
@@ -84,8 +84,8 @@ export class OutboxRepository {
 
 	async findLastProcessedEvent(): Promise<OutboxRecord | null> {
 		const query = `
-			SELECT id, aggregate_id, aggregate_type, event_type, payload, sequence_number, 
-			       created_at, processed_at, status, attempts 
+			SELECT id, aggregate_id, aggregate_type, event_type, payload, sequence_number,
+			       created_at, processed_at, status, attempts
 			FROM outbox
 			WHERE status = 'PROCESSED'
 			ORDER BY sequence_number DESC
@@ -119,8 +119,8 @@ export class OutboxRepository {
 
 		const query = `
 			INSERT INTO outbox (
-				id, aggregate_id, aggregate_type, event_type, 
-				payload, sequence_number, status, attempts, 
+				id, aggregate_id, aggregate_type, event_type,
+				payload, sequence_number, status, attempts,
 				created_at
 			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
 			RETURNING id
@@ -141,10 +141,10 @@ export class OutboxRepository {
 		await backOff(
 			async () => {
 				const query = `
-					UPDATE outbox 
-					SET status = 'PROCESSED', 
-						processed_at = NOW(), 
-						attempts = attempts + 1, 
+					UPDATE outbox
+					SET status = 'PROCESSED',
+						processed_at = NOW(),
+						attempts = attempts + 1,
 						sequence_number = $1
 					WHERE id = $2 AND attempts = $3
 				`;
@@ -164,8 +164,8 @@ export class OutboxRepository {
 		await backOff(
 			async () => {
 				const query = `
-					UPDATE outbox 
-					SET status = 'FAILED', 
+					UPDATE outbox
+					SET status = 'FAILED',
 						attempts = attempts + 1
 					WHERE id = $1 AND attempts = $2
 				`;
@@ -183,8 +183,8 @@ export class OutboxRepository {
 
 	async markManyAsFailed({ ids }: { ids: string[] }): Promise<void> {
 		const query = `
-			UPDATE outbox 
-			SET status = 'FAILED', 
+			UPDATE outbox
+			SET status = 'FAILED',
 				attempts = attempts + 1
 			WHERE id = $1
 		`;

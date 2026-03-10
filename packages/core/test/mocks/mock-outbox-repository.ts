@@ -1,4 +1,4 @@
-import { OutboxRecord, OutboxStatus } from "../../src/models/outbox-record";
+import { type OutboxRecord, OutboxStatus } from "../../src/models/outbox-record";
 
 export class MockOutboxRepository {
 	private records: Map<string, OutboxRecord> = new Map();

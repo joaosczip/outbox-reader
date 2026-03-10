@@ -1,6 +1,6 @@
-import { NATSPublisher } from "../src/nats-publisher";
 import { Logger } from "../src/logger";
-import { RetryConfig } from "../src/types";
+import { NATSPublisher } from "../src/nats-publisher";
+import type { RetryConfig } from "../src/types";
 
 describe("NATSPublisher", () => {
 	const retryConfig: RetryConfig = {

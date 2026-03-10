@@ -1,4 +1,4 @@
-import { Wal2Json } from "pg-logical-replication";
+import type { Wal2Json } from "pg-logical-replication";
 
 export interface MockChangeData {
 	kind?: "insert" | "update" | "delete";
