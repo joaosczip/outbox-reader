@@ -6,27 +6,27 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 # Start the service (with hot reload)
-npm run start
+bun run start
 
 # Run tests
-npm test
+bun test
 
 # Run a single test file
-npx jest test/outbox-processor.test.ts
+bun test test/outbox-processor.test.ts
 
 # Build TypeScript
-npm run build
+bun run build
 
 # Lint
-npx eslint src/**/*.ts
+bunx eslint src/**/*.ts
 
 # Cronjobs (run manually or on a schedule)
-npm run reprocess-failed-events
-npm run check-pending-events
+bun run reprocess-failed-events
+bun run check-pending-events
 
 # CLI tool for Prisma schema generation
-npm run schema:generate
-npx outbox-schema [options]
+bun run schema:generate
+bunx outbox-schema [options]
 
 # Docker (PostgreSQL + NATS)
 docker compose up -d
@@ -83,4 +83,4 @@ See `.env.example` and `src/config.ts` for all NATS and optional variables.
 
 ## Test Structure
 
-Tests live in `test/` with mocks in `test/mocks/`. The project uses Jest with `ts-jest`. Tests are co-located by feature (`outbox-processor.test.ts`, `nats-publisher.test.ts`, `prisma-schema-generator.test.ts`).
+Tests live in `test/` with mocks in `test/mocks/`. The project uses Bun's built-in test runner. Tests are co-located by feature (`outbox-processor.test.ts`, `nats-publisher.test.ts`, `prisma-schema-generator.test.ts`).
