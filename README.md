@@ -28,13 +28,189 @@ bun run start
 
 ## CLI
 
-The `outbox` CLI sets up the outbox table and replication infrastructure.
+The `outbox` CLI sets up the replication infrastructure and the outbox table.
 
 ```
 outbox create schema     — add outbox model to schema.prisma (no migration)
 outbox create migration  — add model + run prisma migrate dev
 outbox create config     — generate a sample outbox-config.json
 outbox setup replication — create a PostgreSQL logical replication slot
+```
+
+### `outbox setup replication`
+
+#### Prerequisites
+
+Before running this command, PostgreSQL must be configured for logical replication. Without this, the command will fail with `logical decoding requires wal_level >= logical`.
+
+**1. Configure `postgresql.conf`**
+
+Add or update these settings:
+
+```
+wal_level = logical
+max_wal_senders = 10
+max_replication_slots = 10
+```
+
+These settings require a **server restart** to take effect.
+
+- **Managed/bare-metal Postgres:** edit `postgresql.conf`, then restart the server:
+  ```sh
+  pg_ctl restart
+  # or
+  systemctl restart postgresql
+  ```
+- **Docker CLI:** pass the settings as `-c` flags when starting the container:
+  ```sh
+  docker run -d \
+    -e POSTGRES_PASSWORD=secret \
+    -p 5432:5432 \
+    postgres:16 \
+    -c wal_level=logical \
+    -c max_wal_senders=10 \
+    -c max_replication_slots=10
+  ```
+  Then either create a user with the replication role:
+  ```sh
+  docker exec -it <container> psql -U postgres -c "CREATE USER outbox_user WITH LOGIN REPLICATION PASSWORD 'secret';"
+  ```
+  Or grant it to an existing user:
+  ```sh
+  docker exec -it <container> psql -U postgres -c "ALTER USER existing_user REPLICATION;"
+  ```
+- **docker-compose:** add a `command` entry to your `db` service:
+  ```yaml
+  services:
+    db:
+      image: postgres:16
+      environment:
+        POSTGRES_PASSWORD: secret
+      command:
+        - "postgres"
+        - "-c"
+        - "wal_level=logical"
+        - "-c"
+        - "max_wal_senders=10"
+        - "-c"
+        - "max_replication_slots=10"
+  ```
+  No restart is needed when using `-c` flags — the settings are active from container start.
+
+  To set up the replication user, either create a dedicated one or grant the role to an existing user. You can use an init SQL script by mounting it into `/docker-entrypoint-initdb.d/`:
+  ```yaml
+  services:
+    db:
+      image: postgres:16
+      volumes:
+        - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+  ```
+  **Option 1** — create a new user (`init.sql`):
+  ```sql
+  CREATE USER outbox_user WITH LOGIN REPLICATION PASSWORD 'secret';
+  ```
+  **Option 2** — grant replication to an existing user (`init.sql`):
+  ```sql
+  ALTER USER existing_user REPLICATION;
+  ```
+  Or apply it manually against a running container:
+  ```sh
+  docker compose exec db psql -U postgres -c "ALTER USER existing_user REPLICATION;"
+  ```
+
+Verify the settings took effect:
+
+```sql
+SHOW wal_level;
+```
+
+**2. User role requirements**
+
+The connecting user must have `LOGIN` and `REPLICATION` roles:
+
+```sql
+CREATE USER outbox_user WITH LOGIN REPLICATION PASSWORD 'secret';
+```
+
+To grant the `REPLICATION` role to an existing user:
+
+```sql
+ALTER USER existing_user REPLICATION;
+```
+
+**3. Install wal2json**
+
+`wal2json` is a PostgreSQL logical decoding plugin required for WAL replication. If it is missing, `outbox setup replication` will fail with `could not access file "wal2json": No such file or directory`.
+
+**Managed / bare-metal (Debian/Ubuntu):**
+
+```sh
+sudo apt-get install postgresql-17-wal2json
+# Adjust version number to match your PostgreSQL installation
+```
+
+**Docker CLI / docker-compose:**
+
+The official `postgres` image does not include `wal2json`. Build a custom image:
+
+**`Dockerfile.pg`:**
+```dockerfile
+FROM postgres:17-bullseye
+
+RUN apt-get update \
+    && apt-get install -y postgresql-17-wal2json \
+    && rm -rf /var/lib/apt/lists/*
+```
+
+**Docker CLI:**
+```sh
+docker build -f Dockerfile.pg -t postgres-wal2json .
+docker run -d \
+  -e POSTGRES_PASSWORD=secret \
+  -p 5432:5432 \
+  postgres-wal2json \
+  -c wal_level=logical \
+  -c max_wal_senders=10 \
+  -c max_replication_slots=10
+```
+
+**docker-compose:**
+```yaml
+services:
+  db:
+    build:
+      context: .
+      dockerfile: Dockerfile.pg
+    ...
+```
+
+**Verify the plugin is available:**
+
+```sql
+SELECT * FROM pg_available_extensions WHERE name = 'wal2json';
+```
+
+#### Options
+
+```
+-h, --host       PostgreSQL host               [default: localhost]
+-p, --port       PostgreSQL port               [default: 5432]
+-u, --user       PostgreSQL user               [required]
+-P, --password   PostgreSQL password           [or set PGPASSWORD env var]
+-d, --database   PostgreSQL database           [required]
+-s, --slot-name  Replication slot name         [required]
+```
+
+#### Example
+
+```sh
+$ outbox setup replication -h 127.0.0.1 -p 5434 -u postgres -P postgres -d my-db -s my-db-slot
+```
+
+You should receive the following output:
+
+```sh
+Replication slot "my-db-slot" created successfully.
 ```
 
 ### `outbox create schema`
@@ -76,17 +252,6 @@ outbox setup replication — create a PostgreSQL logical replication slot
     "version": "Int @default(1)"
   }
 }
-```
-
-### `outbox setup replication`
-
-```
--h, --host       PostgreSQL host               [default: localhost]
--p, --port       PostgreSQL port               [default: 5432]
--u, --user       PostgreSQL user               [required]
--P, --password   PostgreSQL password           [or set PGPASSWORD env var]
--d, --database   PostgreSQL database           [required]
--s, --slot-name  Replication slot name         [required]
 ```
 
 ### Manual SQL alternative
