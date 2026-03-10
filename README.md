@@ -179,19 +179,71 @@ The outbox reader will automatically detect these changes and publish them to th
 
 ## Architecture
 
-The Outbox Reader consists of the following components:
+Outbox Reader implements the **Transactional Outbox Pattern**: instead of publishing domain events directly to a message broker (which can fail and leave the system in an inconsistent state), services write events into an `outbox` table in the same database transaction as the business operation. Outbox Reader then reads those records and reliably forwards them to NATS JetStream.
 
-1. **PostgreSQL Replication Listener** - Captures database changes from the WAL log
-2. **Event Processor** - Transforms database changes into domain events
-3. **NATS Publisher** - Publishes events to NATS JetStream
-4. **Retry Manager** - Handles failed events with exponential backoff
+### How it works
+
+The core pipeline is driven by **PostgreSQL logical replication**. Outbox Reader subscribes to a replication slot and receives WAL (Write-Ahead Log) events decoded by the `wal2json` plugin every time a row is inserted into the `outbox` table — without polling.
 
 ```
-┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
-│  PostgreSQL │    │   Outbox    │    │    NATS     │    │   Service   │
-│  Database   │───>│   Reader    │───>│  JetStream  │───>│  Consumers  │
-└─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
+INSERT into outbox
+        │
+        ▼
+┌───────────────┐   WAL / wal2json   ┌─────────────────────┐
+│  PostgreSQL   │ ─────────────────> │  ReplicationService │
+│  (outbox tbl) │                    │  (replication.ts)   │
+└───────────────┘                    └──────────┬──────────┘
+                                                │ onChange
+                                                ▼
+                                     ┌─────────────────────┐
+                                     │   OutboxProcessor   │
+                                     │ filterChanges()      │  ← keeps only INSERT on outbox
+                                     │ processInserts()     │  ← confirmatory DB read, publish, update status
+                                     └──────────┬──────────┘
+                                      ┌─────────┴──────────┐
+                                      ▼                     ▼
+                             ┌────────────────┐   ┌────────────────────┐
+                             │OutboxRepository│   │  NATSPublisher     │
+                             │(outbox-repo.ts)│   │ (nats-publisher.ts)│
+                             └────────────────┘   └────────────────────┘
+                                                           │
+                                                           ▼
+                                                  ┌────────────────┐
+                                                  │ NATS JetStream │
+                                                  │ (consumers)    │
+                                                  └────────────────┘
 ```
+
+### Step-by-step flow
+
+1. **WAL capture** — `startReplication()` opens a logical replication connection to PostgreSQL and subscribes to the configured replication slot. `wal2json` decodes each committed WAL record into a structured JSON change event.
+
+2. **Filtering** — `OutboxProcessor.filterChanges()` discards any non-INSERT or non-outbox changes and maps database column names to camelCase `OutboxRecord` fields.
+
+3. **Confirmatory read** — `OutboxProcessor.processInserts()` queries the database for the record by ID, confirming it's still `PENDING` or `FAILED` and hasn't exceeded the maximum retry count. This prevents duplicate processing if two instances are running.
+
+4. **Publish** — `NATSPublisher.publish()` sends the event to JetStream using `record.eventType` as the subject and `record.aggregateId` as the deduplication message ID. The connection is established lazily on the first publish call.
+
+5. **Status update** — On success, the record is marked `PROCESSED` and the NATS stream sequence number is stored alongside it. On failure (after retries), it's marked `FAILED` and the attempt counter is incremented.
+
+### Status transitions
+
+```
+PENDING ──► PROCESSED   (publish succeeded)
+PENDING ──► FAILED      (publish failed after all retries)
+FAILED  ──► PENDING     (cronjob re-inserts the record, triggering a new WAL event)
+```
+
+### Fault tolerance
+
+Both the NATS publish and the subsequent database status update are wrapped in independent exponential backoff with full jitter:
+
+| Operation       | Max attempts | Starting delay | Max delay |
+|-----------------|:------------:|:--------------:|:---------:|
+| NATS publish    | 10           | 1 s            | 10 s      |
+| DB status write | 10           | 300 ms         | 5 s       |
+
+Failed events can be automatically reprocessed by the `reprocess-failed-events` cronjob, which deletes them and re-inserts them as `PENDING` inside a single transaction — causing the WAL stream to re-trigger the full pipeline.
 
 ## Monitoring
 
