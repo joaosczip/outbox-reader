@@ -1,72 +1,74 @@
-#!/usr/bin/env node
-
-import { Command } from "commander";
+import type { ArgumentsCamelCase, Argv } from "yargs";
 import { PrismaSchemaGenerator } from "../services/prisma-schema-generator";
 import type { SchemaGenerationConfig } from "../types/schema-config";
 
-const program = new Command();
-
-program.name("outbox-schema").description("Outbox Reader - Prisma Schema Generator").version("1.0.0");
-
-program
-	.option("-s, --schema-path <path>", "Path to schema.prisma file", "./prisma/schema.prisma")
-	.option("-m, --model-name <name>", "Name of the outbox model", "OutboxRecord")
-	.option("-t, --table-name <name>", "Name of the database table", "outbox")
-	.option("--migration-name <name>", "Name for the migration", "add_outbox_table")
-	.option("-c, --config <path>", "Path to configuration file")
-	.option("--skip-migration", "Skip migration generation", false)
-	.action(async (options) => {
-		try {
-			const config: SchemaGenerationConfig = {
-				schemaPath: options.schemaPath,
-				modelName: options.modelName,
-				tableName: options.tableName,
-				migrationName: options.migrationName,
-				generateMigration: !options.skipMigration,
-			};
-
-			const generator = new PrismaSchemaGenerator({
-				config,
-				configPath: options.config,
-			});
-
-			await generator.generate();
-		} catch (error) {
-			console.error("❌ Error generating schema:", error);
-			process.exit(1);
-		}
-	});
-
-program
-	.command("generate-config")
-	.description("Generate a sample configuration file")
-	.option("-o, --output <path>", "Output path for the config file", "./outbox-config.json")
-	.action((options) => {
-		PrismaSchemaGenerator.generateConfigFile(options.output);
-	});
-
-program.addHelpText(
-	"after",
-	`
-Examples:
-  $ outbox-schema                                    Generate schema with defaults
-  $ outbox-schema -s ./database/schema.prisma       Generate schema with custom path
-  $ outbox-schema -c ./outbox-config.json           Generate schema using config file
-  $ outbox-schema generate-config                   Generate a sample config file
-  $ outbox-schema --skip-migration                  Generate schema without migration
-`,
-);
-
-async function main(): Promise<void> {
-	await program.parseAsync(process.argv);
+interface GenerateSchemaArgs {
+	schemaPath: string;
+	modelName: string;
+	tableName: string;
+	migrationName: string;
+	config?: string;
+	skipMigration: boolean;
 }
 
-// Only run if this file is executed directly
-if (require.main === module) {
-	main().catch((error) => {
-		console.error("❌ Unexpected error:", error);
+export const command = ["schema", "$0"];
+export const describe = "Generate Prisma schema and migration for the outbox table";
+
+export function builder(yargs: Argv): Argv<GenerateSchemaArgs> {
+	return yargs
+		.option("schema-path", {
+			alias: "s",
+			type: "string",
+			description: "Path to schema.prisma file",
+			default: "./prisma/schema.prisma",
+		})
+		.option("model-name", {
+			alias: "m",
+			type: "string",
+			description: "Name of the outbox model",
+			default: "OutboxRecord",
+		})
+		.option("table-name", {
+			alias: "t",
+			type: "string",
+			description: "Name of the database table",
+			default: "outbox",
+		})
+		.option("migration-name", {
+			type: "string",
+			description: "Name for the migration",
+			default: "add_outbox_table",
+		})
+		.option("config", {
+			alias: "c",
+			type: "string",
+			description: "Path to configuration file",
+		})
+		.option("skip-migration", {
+			type: "boolean",
+			description: "Skip migration generation",
+			default: false,
+		}) as Argv<GenerateSchemaArgs>;
+}
+
+export async function handler(argv: ArgumentsCamelCase<GenerateSchemaArgs>): Promise<void> {
+	try {
+		const config: SchemaGenerationConfig = {
+			schemaPath: argv.schemaPath,
+			modelName: argv.modelName,
+			tableName: argv.tableName,
+			migrationName: argv.migrationName,
+			generateMigration: !argv.skipMigration,
+		};
+
+		const generator = new PrismaSchemaGenerator({
+			config,
+			configPath: argv.config,
+		});
+
+		await generator.generate();
+	} catch (error) {
+		console.error("Error generating schema:", error);
 		process.exit(1);
-	});
+	}
 }
-
-export { main as generateOutboxSchema };

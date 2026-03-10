@@ -14,15 +14,19 @@
 	},
 	"scripts": {
 		"build": "rm -rf dist && tsc -b",
-		"generate": "bun src/cli/generate-schema.ts",
+		"generate": "bun src/cli/index.ts",
+		"cli": "bun src/cli/index.ts",
 		"lint": "biome check src/",
 		"test": "bun test"
 	},
 	"dependencies": {
-		"commander": "^13.1.0"
+		"pg": "^8.14.0",
+		"yargs": "^17.7.2"
 	},
 	"devDependencies": {
 		"@types/bun": "latest",
-		"@types/node": "^20.3.1"
+		"@types/node": "^20.3.1",
+		"@types/pg": "^8.11.11",
+		"@types/yargs": "^17.0.33"
 	}
 }
