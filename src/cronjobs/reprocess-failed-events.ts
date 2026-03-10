@@ -36,11 +36,11 @@ const run = async () => {
 		await Promise.all(
 			failedEvents.map(async (event) => {
 				logger.info({
-					message: `Reprocessing failed event ${event.aggregateId} ${event.eventType}`,
+					message: `Reprocessing failed event ${event.aggregate_id} ${event.event_type}`,
 					extra: {
 						id: event.id,
-						aggregateId: event.aggregateId,
-						eventType: event.eventType,
+						aggregateId: event.aggregate_id,
+						eventType: event.event_type,
 						attempts: event.attempts,
 					},
 				});
@@ -48,8 +48,12 @@ const run = async () => {
 				await tx.delete(event.id, "FAILED");
 
 				await tx.create({
-					...event,
+					id: event.id,
+					aggregateId: event.aggregate_id,
+					aggregateType: event.aggregate_type,
+					eventType: event.event_type,
 					payload: event.payload,
+					sequenceNumber: event.sequence_number,
 					status: "PENDING",
 					attempts: event.attempts,
 				});
@@ -58,8 +62,8 @@ const run = async () => {
 					message: "Failed event reprocessed",
 					extra: {
 						id: event.id,
-						aggregateId: event.aggregateId,
-						eventType: event.eventType,
+						aggregateId: event.aggregate_id,
+						eventType: event.event_type,
 						attempts: event.attempts,
 					},
 				});

@@ -7,6 +7,19 @@ import type { JitterType } from "exponential-backoff/dist/options";
 import { OutboxRecord } from "./models/outbox-record";
 import type { RetryCallback, RetryConfig } from "./types";
 
+type OutboxRow = {
+	id: string;
+	aggregate_id: string;
+	aggregate_type: string;
+	event_type: string;
+	payload: unknown;
+	sequence_number: number;
+	created_at: Date;
+	processed_at: Date | null;
+	status: string;
+	attempts: number;
+};
+
 type UpdateOutboxRecordParams = {
 	id: string;
 	sequenceNumber: number;
@@ -34,7 +47,7 @@ export class OutboxRepository {
 		this.retryConfig = retryConfig;
 	}
 
-	async findUnprocessedById(id: string) {
+	async findUnprocessedById(id: string): Promise<OutboxRow | null> {
 		const query = `
 			SELECT id, aggregate_id, aggregate_type, event_type, payload, sequence_number, 
 			       created_at, processed_at, status, attempts 
@@ -45,7 +58,7 @@ export class OutboxRepository {
 		return result.rows[0] || null;
 	}
 
-	async findFailedEvents() {
+	async findFailedEvents(): Promise<OutboxRow[]> {
 		const query = `
 			SELECT id, aggregate_id, aggregate_type, event_type, payload, sequence_number, 
 			       created_at, processed_at, status, attempts 
@@ -56,7 +69,7 @@ export class OutboxRepository {
 		return result.rows;
 	}
 
-	async findRecentPendingEvents(minutes = 10) {
+	async findRecentPendingEvents(minutes = 10): Promise<OutboxRow[]> {
 		const query = `
 			SELECT id, aggregate_id, aggregate_type, event_type, payload, sequence_number, 
 			       created_at, processed_at, status, attempts 
@@ -183,7 +196,7 @@ export class OutboxRepository {
 		);
 	}
 
-	async onTransaction(callback: (tx: OutboxRepository) => Promise<void>) {
+	async onTransaction(callback: (tx: OutboxRepository) => Promise<void>): Promise<void> {
 		const client = await this.pool.connect();
 
 		try {

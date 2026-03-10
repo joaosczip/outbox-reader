@@ -40,7 +40,7 @@ export class OutboxProcessor {
 			}
 
 			const sequenceNumber = await publisher.publish({
-				record: outbox as OutboxRecord,
+				record: outbox as unknown as OutboxRecord,
 				retry: (e, attempts) => {
 					this.logger.error({
 						message: "Error publishing NATS message",

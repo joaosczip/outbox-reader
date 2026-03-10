@@ -61,7 +61,7 @@ export const run = async () => {
 	}
 
 	while (pendingEvens.length) {
-		const event = pendingEvens.shift() as OutboxRecord;
+		const event = pendingEvens.shift() as unknown as OutboxRecord;
 
 		const lookupSequenceNumber = lastSequenceNumber + 1;
 
@@ -113,7 +113,7 @@ export const run = async () => {
 					},
 				});
 
-				eventsToBeMarkedAsFailed = [event, ...pendingEvens.splice(0)] as OutboxRecord[];
+				eventsToBeMarkedAsFailed = [event, ...pendingEvens.splice(0)] as unknown as OutboxRecord[];
 			} else {
 				logger.error({
 					message: "Failed to get message",

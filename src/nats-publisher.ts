@@ -44,7 +44,7 @@ export class NATSPublisher implements Publisher {
 			});
 		}
 
-		const jc = jetstream(this.connection);
+		const jc = jetstream(this.connection as unknown as Parameters<typeof jetstream>[0]);
 
 		try {
 			this.logger.info({
