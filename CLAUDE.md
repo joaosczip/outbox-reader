@@ -28,9 +28,10 @@ bun run lint
 bun run reprocess-failed-events
 bun run check-pending-events
 
-# CLI tool for Prisma schema generation
+# CLI tool for Prisma schema generation (via workspace root)
 bun run schema:generate
-bunx outbox-schema [options]
+# Or run directly inside the cli package
+cd packages/cli && bun src/cli/generate-schema.ts [options]
 
 # Docker (PostgreSQL + NATS)
 docker compose up -d
@@ -82,7 +83,7 @@ All retry-capable operations accept a `RetryConfig` with `numOfAttempts`, `start
 
 ### CLI / Library Usage
 
-`packages/core/src/lib.ts` exports all core components for programmatic use. The `outbox-schema` bin (`packages/cli/bin/outbox-schema.js`) wraps `packages/cli/src/cli/generate-schema.ts` to generate Prisma schema and migrations for the outbox table.
+`packages/core/src/lib.ts` exports all core components for programmatic use. `packages/cli/src/index.ts` is the public API entry for the CLI package, exporting `PrismaSchemaGenerator` and the schema config types. The `outbox-schema` bin (`packages/cli/bin/outbox-schema.js`) wraps `packages/cli/src/cli/generate-schema.ts` to generate Prisma schema and migrations for the outbox table.
 
 ## Environment Variables
 

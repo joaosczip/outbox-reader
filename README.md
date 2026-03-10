@@ -6,6 +6,17 @@ A service that implements the [Transactional Outbox Pattern](https://microservic
 
 Outbox Reader captures database changes via PostgreSQL's logical replication and publishes them to a NATS JetStream. It ensures that events are reliably delivered even in case of failures through a robust retry mechanism and transaction handling.
 
+## Monorepo Structure
+
+This repository is a Bun workspace monorepo with two independent packages:
+
+| Package | Name | Description |
+|---------|------|-------------|
+| `packages/core` | `@outbox-reader/core` | Runtime service — WAL replication, event processing, NATS publishing, DB repository, cronjobs |
+| `packages/cli` | `@outbox-reader/cli` | Developer tooling — Prisma schema generator and CLI for setting up the outbox table |
+
+The CLI has no dependency on core and can be used standalone.
+
 ## Features
 
 - PostgreSQL logical replication integration using `pg-logical-replication` and Wal2Json
@@ -17,7 +28,7 @@ Outbox Reader captures database changes via PostgreSQL's logical replication and
 
 ## Prerequisites
 
-- Node.js v23.7.0 or later
+- Bun v1.2.0 or later
 - PostgreSQL with logical replication enabled
 - NATS server with JetStream enabled
 
@@ -152,7 +163,7 @@ The following environment variables configure the NATS connection:
 ### Start the service
 
 ```bash
-npm run start
+bun run start
 ```
 
 ### Creating outbox entries
@@ -188,7 +199,17 @@ TBD
 
 ## Testing
 
-TBD
+```bash
+# Run all tests across both packages
+bun run test
+
+# Run tests for a specific package
+cd packages/core && bun test
+cd packages/cli && bun test
+
+# Run a single test file
+cd packages/core && bun test test/outbox-processor.test.ts
+```
 
 ## Contributing
 
