@@ -10,7 +10,7 @@
 		"bun": ">=1.2.0"
 	},
 	"bin": {
-		"outbox-schema": "./bin/outbox-schema.js"
+		"outbox": "./bin/outbox.js"
 	},
 	"scripts": {
 		"build": "rm -rf dist && tsc -b",

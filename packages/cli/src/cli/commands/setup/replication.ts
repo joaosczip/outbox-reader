@@ -1,6 +1,6 @@
 import type { ArgumentsCamelCase, Argv } from "yargs";
-import { ReplicationSetupService } from "../services/replication-setup";
-import type { ReplicationSetupOptions } from "../types/replication-config";
+import { ReplicationSetupService } from "../../../services/replication-setup";
+import type { ReplicationSetupOptions } from "../../../types/replication-config";
 
 const PREREQUISITES = `
 The following settings must be set in postgresql.conf (requires server restart):
@@ -22,8 +22,8 @@ interface SetupReplicationArgs {
 	"slot-name": string;
 }
 
-export const command = "setup-replication";
-export const describe = "Create a PostgreSQL logical replication slot using the wal2json plugin";
+export const command = "replication";
+export const describe = "Create a PostgreSQL logical replication slot";
 
 export function builder(yargs: Argv) {
 	return yargs

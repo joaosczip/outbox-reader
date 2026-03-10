@@ -2,15 +2,13 @@
 
 import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
-import * as generateConfig from "./generate-config";
-import * as generateSchema from "./generate-schema";
-import * as setupReplication from "./setup-replication";
+import * as create from "./commands/create/index";
+import * as setup from "./commands/setup/index";
 
 yargs(hideBin(process.argv))
-	.scriptName("outbox-schema")
-	.command(generateSchema)
-	.command(generateConfig)
-	.command(setupReplication)
+	.scriptName("outbox")
+	.command(create)
+	.command(setup)
 	.demandCommand(1)
 	.strict()
 	.help()

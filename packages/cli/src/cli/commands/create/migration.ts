@@ -1,20 +1,19 @@
 import type { ArgumentsCamelCase, Argv } from "yargs";
-import { PrismaSchemaGenerator } from "../services/prisma-schema-generator";
-import type { SchemaGenerationConfig } from "../types/schema-config";
+import { PrismaSchemaGenerator } from "../../../services/prisma-schema-generator";
+import type { SchemaGenerationConfig } from "../../../types/schema-config";
 
-interface GenerateSchemaArgs {
+interface CreateMigrationArgs {
 	schemaPath: string;
 	modelName: string;
 	tableName: string;
 	migrationName: string;
 	config?: string;
-	skipMigration: boolean;
 }
 
-export const command = ["schema", "$0"];
-export const describe = "Generate Prisma schema and migration for the outbox table";
+export const command = "migration";
+export const describe = "Add the outbox model to schema.prisma and generate a migration";
 
-export function builder(yargs: Argv): Argv<GenerateSchemaArgs> {
+export function builder(yargs: Argv): Argv<CreateMigrationArgs> {
 	return yargs
 		.option("schema-path", {
 			alias: "s",
@@ -43,22 +42,17 @@ export function builder(yargs: Argv): Argv<GenerateSchemaArgs> {
 			alias: "c",
 			type: "string",
 			description: "Path to configuration file",
-		})
-		.option("skip-migration", {
-			type: "boolean",
-			description: "Skip migration generation",
-			default: false,
-		}) as Argv<GenerateSchemaArgs>;
+		}) as Argv<CreateMigrationArgs>;
 }
 
-export async function handler(argv: ArgumentsCamelCase<GenerateSchemaArgs>): Promise<void> {
+export async function handler(argv: ArgumentsCamelCase<CreateMigrationArgs>): Promise<void> {
 	try {
 		const config: SchemaGenerationConfig = {
 			schemaPath: argv.schemaPath,
 			modelName: argv.modelName,
 			tableName: argv.tableName,
 			migrationName: argv.migrationName,
-			generateMigration: !argv.skipMigration,
+			generateMigration: true,
 		};
 
 		const generator = new PrismaSchemaGenerator({
@@ -68,7 +62,7 @@ export async function handler(argv: ArgumentsCamelCase<GenerateSchemaArgs>): Pro
 
 		await generator.generate();
 	} catch (error) {
-		console.error("Error generating schema:", error);
+		console.error("Error generating migration:", error);
 		process.exit(1);
 	}
 }
