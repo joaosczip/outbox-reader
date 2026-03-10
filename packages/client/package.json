@@ -1,0 +1,20 @@
+{
+	"name": "@outbox-reader/client",
+	"version": "1.0.0",
+	"description": "Outbox pattern client — ORM-agnostic adapter-based API for creating transactional outbox events",
+	"main": "dist/index.js",
+	"types": "dist/index.d.ts",
+	"license": "MIT",
+	"engines": {
+		"bun": ">=1.2.0"
+	},
+	"scripts": {
+		"build": "rm -rf dist && tsc -b",
+		"lint": "biome check src/",
+		"test": "bun test"
+	},
+	"devDependencies": {
+		"@types/bun": "latest",
+		"@types/node": "^20.3.1"
+	}
+}

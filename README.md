@@ -7,9 +7,10 @@ A service that implements the [Transactional Outbox Pattern](https://microservic
 | Package | Name | Description |
 |---------|------|-------------|
 | `packages/core` | `@outbox-reader/core` | Runtime service — WAL replication, event processing, NATS publishing, DB repository, cronjobs |
+| `packages/client` | `@outbox-reader/client` | ORM-agnostic client for creating transactional outbox events via adapters |
 | `packages/cli` | `@outbox-reader/cli` | Developer tooling — Prisma schema generator and CLI for setting up the outbox table |
 
-The CLI has no dependency on core and can be used standalone.
+The client and CLI have no dependency on core and can be used standalone.
 
 ## Quick Start
 

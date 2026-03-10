@@ -96,3 +96,56 @@ See `.env.example` and `packages/core/src/config.ts` for all NATS and optional v
 ## Test Structure
 
 Tests live in `test/` within each package (`packages/core/test/`, `packages/cli/test/`). The project uses Bun's built-in test runner. Core mocks are in `packages/core/test/mocks/`.
+
+## Arranging Tests (Mandatory)
+
+- Never instantiate classes under test directly with their full dependency list — use mock objects or factory helpers instead.
+- Prefer testing through the public interface of a class, not its internal implementation details.
+- Keep test setup in `beforeEach`/`beforeAll` blocks and tear down in `afterEach`/`afterAll`.
+
+**Bad** — direct instantiation with casted mocks:
+
+```ts
+const processor = new OutboxProcessor(
+  repository as never,
+  publisher as never,
+  {} as never,
+);
+```
+
+**Good** — mock collaborators explicitly:
+
+```ts
+let processor: OutboxProcessor;
+
+beforeEach(() => {
+  const repository = mock<OutboxRepository>();
+  const publisher = mock<Publisher>();
+  processor = new OutboxProcessor(repository, publisher, config);
+});
+```
+
+## Testing Expectations (Mandatory)
+
+- Every bugfix or feature must include relevant tests.
+- Run narrow tests first, then broaden:
+  - Unit: `packages/core/test/*.test.ts`
+  - Integration (if applicable): tests that exercise real DB/NATS via Testcontainers
+- New or changed behavior must include assertions that cover the full expected outcome, not just the happy path.
+- For critical flows, include at least one regression assertion.
+
+## Coverage Quality (Mandatory)
+
+- Good coverage is not defined by line-coverage percentage alone.
+- Coverage is good when tests validate behavior end-to-end and **fail when that behavior breaks**.
+- Prioritize coverage for critical flows: WAL event processing, status transitions (`PENDING` → `PROCESSED`/`FAILED`), retry logic, and cronjob operations.
+- Prefer assertions that protect against regressions: inputs, outputs, side effects, persistence changes, and error paths.
+- A smaller suite with strong behavioral assertions is better than a larger suite that only executes lines without validating outcomes.
+
+## Bugfix Workflow (Mandatory)
+
+1. Investigate the reported bug and identify the likely root cause and affected flow.
+2. Write a regression test that reproduces the bug and proves the incorrect behavior exists.
+3. Run the regression test and confirm it **fails** before applying the fix.
+4. Implement the code fix.
+5. Run the same regression test again and confirm it **passes** after the fix.
