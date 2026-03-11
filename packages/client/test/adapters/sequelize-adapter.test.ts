@@ -1,71 +1,116 @@
-import { describe, expect, it, mock } from "bun:test";
-import { SequelizeAdapter, type SequelizeLike, type SequelizeTransaction } from "../../src/adapters/sequelize-adapter";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { Pool, type PoolClient } from "pg";
+import { SequelizeAdapter, type SequelizeLike } from "../../src/adapters/sequelize-adapter";
 import { OutboxStatus } from "../../src/models/outbox-status";
 import type { Transaction } from "../../src/types/transaction";
 
+const TEST_DB_URL = "postgres://root:root@localhost:5433/ecomm-be";
+
+let pool: Pool;
+let adapter: SequelizeAdapter;
+
+function makePgSequelize(defaultClient: Pool | PoolClient): SequelizeLike {
+	return {
+		async query(sql: string, options?: Record<string, unknown>) {
+			const bind = options?.bind as unknown[] | undefined;
+			const txClient = options?.transaction as PoolClient | undefined;
+			const client = txClient && typeof txClient.query === "function" ? txClient : defaultClient;
+			return client.query(sql, bind);
+		},
+	};
+}
+
+const event = {
+	aggregateId: "order-1",
+	aggregateType: "Order",
+	eventType: "order.created",
+	payload: { total: 100 },
+};
+
+beforeAll(async () => {
+	pool = new Pool({ connectionString: TEST_DB_URL });
+
+	await pool.query(`
+    CREATE TABLE IF NOT EXISTS outbox (
+      id UUID PRIMARY KEY,
+      aggregate_id TEXT NOT NULL,
+      aggregate_type TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      payload JSONB NOT NULL,
+      status TEXT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMP NOT NULL
+    )
+  `);
+});
+
+afterAll(async () => {
+	await pool?.query("DROP TABLE IF EXISTS outbox");
+	await pool?.end();
+});
+
+beforeEach(async () => {
+	await pool.query("DELETE FROM outbox");
+	adapter = new SequelizeAdapter(makePgSequelize(pool));
+});
+
 describe("SequelizeAdapter", () => {
-	const mockSequelize: SequelizeLike = {
-		query: mock(() => Promise.resolve(undefined)),
-	};
-
-	const mockTx: SequelizeTransaction = {};
-
-	const transaction: Transaction<SequelizeTransaction> = {
-		underlying: mockTx,
-	};
-
-	const event = {
-		aggregateId: "order-1",
-		aggregateType: "Order",
-		eventType: "order.created",
-		payload: { total: 100 },
-	};
-
-	it("should insert into outbox and return generated id", async () => {
-		const adapter = new SequelizeAdapter(mockSequelize);
-
-		const id = await adapter.create(event, transaction);
-
-		expect(id).toBeString();
+	it("returns a valid UUID", async () => {
+		const id = await adapter.create(event, { underlying: {} as never });
 		expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
 	});
 
-	it("should call sequelize.query with correct SQL and bind parameters", async () => {
-		const adapter = new SequelizeAdapter(mockSequelize);
+	it("persists aggregate fields", async () => {
+		const id = await adapter.create(event, { underlying: {} as never });
 
-		const id = await adapter.create(event, transaction);
-
-		expect(mockSequelize.query).toHaveBeenCalledWith(expect.stringContaining("INSERT INTO outbox"), {
-			bind: [
-				id,
-				event.aggregateId,
-				event.aggregateType,
-				event.eventType,
-				JSON.stringify(event.payload),
-				OutboxStatus.PENDING,
-				0,
-			],
-			transaction: mockTx,
-		});
+		const result = await pool.query("SELECT * FROM outbox WHERE id = $1", [id]);
+		const row = result.rows[0];
+		expect(row.aggregate_id).toBe(event.aggregateId);
+		expect(row.aggregate_type).toBe(event.aggregateType);
+		expect(row.event_type).toBe(event.eventType);
 	});
 
-	it("should pass the transaction to the query options", async () => {
-		const adapter = new SequelizeAdapter(mockSequelize);
+	it("persists payload as JSONB", async () => {
+		const id = await adapter.create(event, { underlying: {} as never });
 
-		await adapter.create(event, transaction);
-
-		const callArgs = (mockSequelize.query as ReturnType<typeof mock>).mock.calls.at(-1);
-		const options = callArgs?.[1] as Record<string, unknown>;
-		expect(options.transaction).toBe(mockTx);
+		const result = await pool.query("SELECT payload FROM outbox WHERE id = $1", [id]);
+		expect(result.rows[0].payload).toEqual(event.payload);
 	});
 
-	it("should stringify the payload", async () => {
-		const adapter = new SequelizeAdapter(mockSequelize);
+	it("sets initial status to PENDING and attempts to 0", async () => {
+		const id = await adapter.create(event, { underlying: {} as never });
 
-		await adapter.create(event, transaction);
+		const result = await pool.query("SELECT status, attempts FROM outbox WHERE id = $1", [id]);
+		const row = result.rows[0];
+		expect(row.status).toBe(OutboxStatus.PENDING);
+		expect(row.attempts).toBe(0);
+	});
 
-		const callArgs = (mockSequelize.query as ReturnType<typeof mock>).mock.calls.at(-1);
-		const options = callArgs?.[1] as { bind: unknown[] };
-		expect(options.bind[4]).toBe(JSON.stringify(event.payload));
+	it("commits insert when transaction is committed", async () => {
+		const client = await pool.connect();
+		await client.query("BEGIN");
+		const pgAdapter = new SequelizeAdapter(makePgSequelize(client));
+		const transaction: Transaction<PoolClient> = { underlying: client };
+
+		const id = await pgAdapter.create(event, transaction as never);
+		await client.query("COMMIT");
+		client.release();
+
+		const result = await pool.query("SELECT * FROM outbox WHERE id = $1", [id]);
+		expect(result.rows).toHaveLength(1);
+	});
+
+	it("rolls back insert when transaction is rolled back", async () => {
+		const client = await pool.connect();
+		await client.query("BEGIN");
+		const pgAdapter = new SequelizeAdapter(makePgSequelize(client));
+		const transaction: Transaction<PoolClient> = { underlying: client };
+
+		const id = await pgAdapter.create(event, transaction as never);
+		await client.query("ROLLBACK");
+		client.release();
+
+		const result = await pool.query("SELECT * FROM outbox WHERE id = $1", [id]);
+		expect(result.rows).toHaveLength(0);
 	});
 });
