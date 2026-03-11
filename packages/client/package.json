@@ -4,6 +4,20 @@
 	"description": "Outbox pattern client — ORM-agnostic adapter-based API for creating transactional outbox events",
 	"main": "dist/index.js",
 	"types": "dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"default": "./dist/index.js"
+		},
+		"./prisma": {
+			"types": "./dist/adapters/prisma-adapter.d.ts",
+			"default": "./dist/adapters/prisma-adapter.js"
+		},
+		"./sequelize": {
+			"types": "./dist/adapters/sequelize-adapter.d.ts",
+			"default": "./dist/adapters/sequelize-adapter.js"
+		}
+	},
 	"license": "MIT",
 	"engines": {
 		"bun": ">=1.2.0"
@@ -12,6 +26,18 @@
 		"build": "rm -rf dist && tsc -b",
 		"lint": "biome check src/",
 		"test": "bun test"
+	},
+	"peerDependencies": {
+		"@prisma/client": ">=5.0.0",
+		"sequelize": ">=6.0.0"
+	},
+	"peerDependenciesMeta": {
+		"@prisma/client": {
+			"optional": true
+		},
+		"sequelize": {
+			"optional": true
+		}
 	},
 	"devDependencies": {
 		"@types/bun": "latest",
