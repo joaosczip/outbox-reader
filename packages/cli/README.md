@@ -158,6 +158,30 @@ outbox-schema setup-replication \
 
 If the slot already exists the command exits successfully with an informational message. If the connection or slot creation fails, it exits with code 1 and prints a hint about the `REPLICATION` role.
 
+### `setup client`
+
+Installs the `@outbox-reader/client` package using the auto-detected package manager.
+
+```
+outbox setup client
+```
+
+The command detects the package manager by looking for lockfiles in the current directory:
+
+| Lockfile | Package manager | Install command |
+|----------|----------------|-----------------|
+| `bun.lock` / `bun.lockb` | bun | `bun add` |
+| `yarn.lock` | yarn | `yarn add` |
+| `pnpm-lock.yaml` | pnpm | `pnpm add` |
+| `package-lock.json` (or none) | npm | `npm install` |
+
+**Example:**
+
+```bash
+# Auto-detects package manager and installs @outbox-reader/client
+outbox setup client
+```
+
 ## Global flags
 
 ```
