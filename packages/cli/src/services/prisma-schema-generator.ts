@@ -37,7 +37,7 @@ export class PrismaSchemaGenerator {
 		const { modelName, tableName, customFields } = this.config;
 
 		const standardFields = [
-			"id              String   @id @default(cuid())",
+			'id              String   @id @db.Uuid @default(dbgenerated("uuid_generate_v7()"))',
 			'aggregateId     String   @map("aggregate_id")',
 			'aggregateType   String   @map("aggregate_type")',
 			'eventType       String   @map("event_type")',

@@ -22,8 +22,9 @@ describe("SqlMigrationAdapter", () => {
       stdoutSpy.mockRestore();
 
       const sql = written.join("");
+      expect(sql).toContain('CREATE EXTENSION IF NOT EXISTS "pg_uuidv7"');
       expect(sql).toContain("CREATE TABLE IF NOT EXISTS outbox");
-      expect(sql).toContain("id              UUID PRIMARY KEY");
+      expect(sql).toContain("id              UUID PRIMARY KEY DEFAULT uuid_generate_v7()");
       expect(sql).toContain("aggregate_id    TEXT NOT NULL");
       expect(sql).toContain("aggregate_type  TEXT NOT NULL");
       expect(sql).toContain("event_type      TEXT NOT NULL");

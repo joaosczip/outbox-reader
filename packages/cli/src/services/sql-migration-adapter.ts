@@ -15,8 +15,10 @@ export class SqlMigrationAdapter implements MigrationAdapter {
   }
 
   private renderSql(tableName: string): string {
-    return `CREATE TABLE IF NOT EXISTS ${tableName} (
-  id              UUID PRIMARY KEY,
+    return `CREATE EXTENSION IF NOT EXISTS "pg_uuidv7";
+
+CREATE TABLE IF NOT EXISTS ${tableName} (
+  id              UUID PRIMARY KEY DEFAULT uuid_generate_v7(),
   aggregate_id    TEXT NOT NULL,
   aggregate_type  TEXT NOT NULL,
   event_type      TEXT NOT NULL,

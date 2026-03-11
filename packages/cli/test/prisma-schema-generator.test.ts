@@ -40,6 +40,8 @@ describe("PrismaSchemaGenerator", () => {
 		expect(content).toContain("aggregateId");
 		expect(content).toContain("eventType");
 		expect(content).toContain("payload");
+		expect(content).toContain("@db.Uuid");
+		expect(content).toContain('dbgenerated("uuid_generate_v7()")');
 	});
 
 	it("should append to existing schema file", async () => {
