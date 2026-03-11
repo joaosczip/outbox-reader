@@ -158,6 +158,71 @@ outbox-schema setup-replication \
 
 If the slot already exists the command exits successfully with an informational message. If the connection or slot creation fails, it exits with code 1 and prints a hint about the `REPLICATION` role.
 
+### `create migration`
+
+Generates a database migration for the outbox table. When no `--target` is given, it prints a plain SQL `CREATE TABLE` statement to stdout that you can run manually.
+
+```
+outbox create migration [options]
+
+Options:
+  -T, --target          Migration target: prisma | sequelize | sql  [default: sql (stdout)]
+  -t, --table-name      Database table name                         [default: "outbox"]
+      --migration-name  Name for the migration                      [default: "add_outbox_table"]
+
+  Prisma only:
+  -s, --schema-path     Path to schema.prisma file                  [default: "./prisma/schema.prisma"]
+  -m, --model-name      Prisma model name                           [default: "OutboxRecord"]
+  -c, --config          Path to a JSON config file
+
+  Sequelize only:
+      --migrations-path Path to the migrations directory            [default: auto-detected from .sequelizerc]
+
+  SQL only:
+  -o, --output          Write SQL to this file instead of stdout
+```
+
+**Examples:**
+
+```bash
+# Print SQL to stdout (no ORM dependency)
+outbox create migration
+
+# Save SQL to a file
+outbox create migration --output ./migrations/create_outbox.sql
+
+# Append model to schema.prisma and run prisma migrate dev
+outbox create migration --target prisma
+outbox create migration --target prisma --schema-path ./database/schema.prisma
+
+# Write a timestamped Sequelize migration file
+outbox create migration --target sequelize
+outbox create migration --target sequelize --migrations-path ./db/migrations
+```
+
+The SQL output looks like:
+
+```sql
+CREATE TABLE IF NOT EXISTS outbox (
+  id              UUID PRIMARY KEY,
+  aggregate_id    TEXT NOT NULL,
+  aggregate_type  TEXT NOT NULL,
+  event_type      TEXT NOT NULL,
+  payload         JSONB NOT NULL,
+  status          TEXT NOT NULL DEFAULT 'PENDING',
+  attempts        INTEGER NOT NULL DEFAULT 0,
+  created_at      TIMESTAMP NOT NULL DEFAULT NOW(),
+  processed_at    TIMESTAMP,
+  sequence_number BIGINT
+);
+
+CREATE INDEX IF NOT EXISTS idx_outbox_status ON outbox(status);
+CREATE INDEX IF NOT EXISTS idx_outbox_created_at ON outbox(created_at);
+CREATE INDEX IF NOT EXISTS idx_outbox_sequence_number ON outbox(sequence_number);
+```
+
+The Sequelize migration file is a standard `queryInterface.createTable` / `dropTable` module placed in the migrations directory, named `<timestamp>-<migration-name>.js`. The migrations directory is discovered from `.sequelizerc` (`migrations-path` key), falling back to `./migrations/`.
+
 ### `setup client`
 
 Installs the `@outbox-reader/client` package using the auto-detected package manager.
