@@ -1,15 +1,13 @@
-import fs from "node:fs";
 import path from "node:path";
 import type { MigrationAdapter } from "./migration-adapter";
 import type { SequelizeMigrationOptions } from "../types/migration-adapter-config";
 
-export type FsWriter = (filePath: string, content: string) => void;
+export type FsWriter = (filePath: string, content: string) => Promise<void>;
 export type RequireFn = (id: string) => unknown;
 export type Clock = () => Date;
 
-const defaultFsWriter: FsWriter = (filePath, content) => {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, content, "utf-8");
+const defaultFsWriter: FsWriter = async (filePath, content) => {
+  await Bun.write(filePath, content);
 };
 
 const defaultRequireFn: RequireFn = (id) => require(id);
@@ -33,7 +31,7 @@ export class SequelizeMigrationAdapter implements MigrationAdapter {
     const filePath = path.join(migrationsPath, filename);
 
     const content = this.renderMigration(tableName);
-    this.fsWriter(filePath, content);
+    await this.fsWriter(filePath, content);
 
     console.log(`Created Sequelize migration at ${filePath}`);
   }

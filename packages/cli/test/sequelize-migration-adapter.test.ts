@@ -12,7 +12,7 @@ function makeAdapter({
   clock?: Clock;
 } = {}): { adapter: SequelizeMigrationAdapter; writtenFiles: Array<{ path: string; content: string }> } {
   const writtenFiles: Array<{ path: string; content: string }> = [];
-  const defaultFsWriter: FsWriter = (filePath, content) => writtenFiles.push({ path: filePath, content });
+  const defaultFsWriter: FsWriter = async (filePath, content) => { writtenFiles.push({ path: filePath, content }); };
   const defaultRequireFn: RequireFn = () => ({});
   const fixedDate = new Date("2024-06-15T10:30:45.000Z");
   const defaultClock: Clock = () => fixedDate;

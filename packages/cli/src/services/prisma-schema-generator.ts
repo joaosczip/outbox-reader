@@ -1,4 +1,4 @@
-import * as fs from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import * as path from "node:path";
 import type { OutboxSchemaGenerationOptions, SchemaGenerationConfig } from "../types/schema-config";
 
@@ -13,9 +13,9 @@ export class PrismaSchemaGenerator {
 		let configFromFile: Partial<SchemaGenerationConfig> = {};
 
 		// Load config from file if provided
-		if (options.configPath && fs.existsSync(options.configPath)) {
+		if (options.configPath && existsSync(options.configPath)) {
 			try {
-				const configFile = fs.readFileSync(options.configPath, "utf-8");
+				const configFile = readFileSync(options.configPath, "utf-8");
 				configFromFile = JSON.parse(configFile);
 			} catch (error) {
 				console.warn(`Warning: Could not parse config file at ${options.configPath}:`, error);
@@ -66,17 +66,6 @@ export class PrismaSchemaGenerator {
 }`;
 	}
 
-	private ensureDirectoryExists(filePath: string): void {
-		const dir = path.dirname(filePath);
-		if (!fs.existsSync(dir)) {
-			fs.mkdirSync(dir, { recursive: true });
-		}
-	}
-
-	private schemaFileExists(): boolean {
-		return fs.existsSync(this.config.schemaPath);
-	}
-
 	private getBaseSchema(): string {
 		return `// This is your Prisma schema file,
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
@@ -99,13 +88,11 @@ datasource db {
 	}
 
 	async generateSchema(): Promise<void> {
-		this.ensureDirectoryExists(this.config.schemaPath);
-
 		const outboxModel = this.getOutboxModelSchema();
 
-		if (this.schemaFileExists()) {
+		if (await Bun.file(this.config.schemaPath).exists()) {
 			// Append to existing schema
-			const existingContent = fs.readFileSync(this.config.schemaPath, "utf-8");
+			const existingContent = await Bun.file(this.config.schemaPath).text();
 
 			if (this.hasOutboxModel(existingContent)) {
 				console.log(`✅ ${this.config.modelName} model already exists in ${this.config.schemaPath}`);
@@ -113,12 +100,12 @@ datasource db {
 			}
 
 			const updatedContent = `${existingContent}\n${outboxModel}\n`;
-			fs.writeFileSync(this.config.schemaPath, updatedContent);
+			await Bun.write(this.config.schemaPath, updatedContent);
 			console.log(`✅ Added ${this.config.modelName} model to existing schema at ${this.config.schemaPath}`);
 		} else {
 			// Create new schema file
 			const fullSchema = `${this.getBaseSchema() + outboxModel}\n`;
-			fs.writeFileSync(this.config.schemaPath, fullSchema);
+			await Bun.write(this.config.schemaPath, fullSchema);
 			console.log(`✅ Created new schema file with ${this.config.modelName} model at ${this.config.schemaPath}`);
 		}
 	}
@@ -168,7 +155,7 @@ datasource db {
 	/**
 	 * Generate a sample configuration file
 	 */
-	static generateConfigFile(filePath = "./outbox-config.json"): void {
+	static async generateConfigFile(filePath = "./outbox-config.json"): Promise<void> {
 		const sampleConfig: SchemaGenerationConfig = {
 			schemaPath: "./prisma/schema.prisma",
 			modelName: "OutboxRecord",
@@ -182,7 +169,7 @@ datasource db {
 			},
 		};
 
-		fs.writeFileSync(filePath, JSON.stringify(sampleConfig, null, 2));
+		await Bun.write(filePath, JSON.stringify(sampleConfig, null, 2));
 		console.log(`✅ Sample configuration file created at ${filePath}`);
 	}
 }
