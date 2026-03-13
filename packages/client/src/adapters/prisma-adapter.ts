@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { OutboxStatus } from "../models/outbox-status";
 import type { OutboxAdapter } from "../types/adapter";
 import type { CreateOutboxEvent } from "../types/outbox-event";
@@ -10,7 +9,7 @@ export type PrismaTransactionClient = {
 
 export class PrismaAdapter implements OutboxAdapter<PrismaTransactionClient> {
 	async create(event: CreateOutboxEvent, transaction: Transaction<PrismaTransactionClient>): Promise<string> {
-		const id = randomUUID();
+		const id = Bun.randomUUIDv7();
 		await transaction.underlying.$executeRawUnsafe(
 			`INSERT INTO outbox (id, aggregate_id, aggregate_type, event_type, payload, status, attempts, created_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())`,
