@@ -1,10 +1,9 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { Pool, type PoolClient } from "pg";
 import { SequelizeAdapter, type SequelizeLike } from "../../src/adapters/sequelize-adapter";
+import { config } from "../../src/config";
 import { OutboxStatus } from "../../src/models/outbox-status";
 import type { Transaction } from "../../src/types/transaction";
-
-const TEST_DB_URL = "postgres://root:root@localhost:5433/ecomm-be";
 
 let pool: Pool;
 let adapter: SequelizeAdapter;
@@ -28,7 +27,7 @@ const event = {
 };
 
 beforeAll(async () => {
-	pool = new Pool({ connectionString: TEST_DB_URL });
+	pool = new Pool({ connectionString: config.databaseUrl });
 
 	await pool.query(`
     CREATE TABLE IF NOT EXISTS outbox (
