@@ -1,6 +1,6 @@
 {
 	"name": "@outbox-reader/cli",
-	"version": "1.0.0",
+	"version": "0.0.1",
 	"description": "Outbox Reader developer tooling — Prisma schema generator and CLI",
 	"main": "dist/src/index.js",
 	"types": "dist/src/index.d.ts",
