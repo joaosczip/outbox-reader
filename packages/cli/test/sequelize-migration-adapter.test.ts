@@ -138,6 +138,7 @@ describe("SequelizeMigrationAdapter", () => {
 			expect(content).toContain("aggregate_id");
 			expect(content).toContain("aggregate_type");
 			expect(content).toContain("event_type");
+			expect(content).toContain("Sequelize.STRING(50)");
 			expect(content).toContain("payload");
 			expect(content).toContain("status");
 			expect(content).toContain("attempts");

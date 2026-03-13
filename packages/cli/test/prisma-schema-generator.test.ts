@@ -42,6 +42,7 @@ describe("PrismaSchemaGenerator", () => {
 		expect(content).toContain("payload");
 		expect(content).toContain("@db.Uuid");
 		expect(content).toContain('dbgenerated("uuid_generate_v7()")');
+		expect(content).toContain("@db.VarChar(50)");
 	});
 
 	it("should append to existing schema file", async () => {

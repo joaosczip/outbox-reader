@@ -25,9 +25,9 @@ describe("SqlMigrationAdapter", () => {
 			expect(sql).toContain('CREATE EXTENSION IF NOT EXISTS "pg_uuidv7"');
 			expect(sql).toContain("CREATE TABLE IF NOT EXISTS outbox");
 			expect(sql).toContain("id              UUID PRIMARY KEY DEFAULT uuid_generate_v7()");
-			expect(sql).toContain("aggregate_id    TEXT NOT NULL");
-			expect(sql).toContain("aggregate_type  TEXT NOT NULL");
-			expect(sql).toContain("event_type      TEXT NOT NULL");
+			expect(sql).toContain("aggregate_id    VARCHAR(50) NOT NULL");
+			expect(sql).toContain("aggregate_type  VARCHAR(50) NOT NULL");
+			expect(sql).toContain("event_type      VARCHAR(50) NOT NULL");
 			expect(sql).toContain("payload         JSONB NOT NULL");
 			expect(sql).toContain("status          TEXT NOT NULL DEFAULT 'PENDING'");
 			expect(sql).toContain("attempts        INTEGER NOT NULL DEFAULT 0");

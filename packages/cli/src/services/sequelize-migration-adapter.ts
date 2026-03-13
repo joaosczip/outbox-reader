@@ -79,15 +79,15 @@ module.exports = {
         defaultValue: Sequelize.literal("uuid_generate_v7()"),
       },
       aggregate_id: {
-        type: Sequelize.TEXT,
+        type: Sequelize.STRING(50),
         allowNull: false,
       },
       aggregate_type: {
-        type: Sequelize.TEXT,
+        type: Sequelize.STRING(50),
         allowNull: false,
       },
       event_type: {
-        type: Sequelize.TEXT,
+        type: Sequelize.STRING(50),
         allowNull: false,
       },
       payload: {

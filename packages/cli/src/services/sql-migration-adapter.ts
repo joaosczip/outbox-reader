@@ -19,9 +19,9 @@ export class SqlMigrationAdapter implements MigrationAdapter {
 
 CREATE TABLE IF NOT EXISTS ${tableName} (
   id              UUID PRIMARY KEY DEFAULT uuid_generate_v7(),
-  aggregate_id    TEXT NOT NULL,
-  aggregate_type  TEXT NOT NULL,
-  event_type      TEXT NOT NULL,
+  aggregate_id    VARCHAR(50) NOT NULL,
+  aggregate_type  VARCHAR(50) NOT NULL,
+  event_type      VARCHAR(50) NOT NULL,
   payload         JSONB NOT NULL,
   status          TEXT NOT NULL DEFAULT 'PENDING',
   attempts        INTEGER NOT NULL DEFAULT 0,

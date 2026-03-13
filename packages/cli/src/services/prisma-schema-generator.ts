@@ -38,9 +38,9 @@ export class PrismaSchemaGenerator {
 
 		const standardFields = [
 			'id              String   @id @db.Uuid @default(dbgenerated("uuid_generate_v7()"))',
-			'aggregateId     String   @map("aggregate_id")',
-			'aggregateType   String   @map("aggregate_type")',
-			'eventType       String   @map("event_type")',
+			'aggregateId     String   @db.VarChar(50) @map("aggregate_id")',
+			'aggregateType   String   @db.VarChar(50) @map("aggregate_type")',
+			'eventType       String   @db.VarChar(50) @map("event_type")',
 			"payload         Json",
 			'sequenceNumber  BigInt?  @map("sequence_number")',
 			'createdAt       DateTime @default(now()) @map("created_at")',
