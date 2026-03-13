@@ -42,7 +42,7 @@ docker compose up -d
 This is a **Bun workspace monorepo** with two packages:
 
 - **`packages/core`** (`@outbox-reader/core`): The runtime service — WAL replication, event processing, NATS publishing, DB repository, cronjobs.
-- **`packages/cli`** (`@outy/cli`): Developer tooling — Prisma schema generator and CLI for creating the outbox table. Does **not** depend on core.
+- **`packages/cli`** (`@joaosczip/outy-cli`): Developer tooling — Prisma schema generator and CLI for creating the outbox table. Does **not** depend on core.
 
 ## Architecture
 

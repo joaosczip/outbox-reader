@@ -1,5 +1,5 @@
 {
-	"name": "@outy/cli",
+	"name": "@joaosczip/outy-cli",
 	"version": "0.0.1",
 	"description": "Outbox Reader developer tooling — Prisma schema generator and CLI",
 	"main": "dist/src/index.js",

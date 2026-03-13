@@ -1,17 +1,17 @@
-# @outy/cli
+# @joaosczip/outy-cli
 
 Developer tooling for the Transactional Outbox pattern. Provides a CLI to generate Prisma schemas and set up PostgreSQL logical replication.
 
 ## Installation
 
 ```bash
-bun add @outy/cli
+bun add @joaosczip/outy-cli
 ```
 
 Or run directly without installing:
 
 ```bash
-bunx @outy/cli --help
+bunx @joaosczip/outy-cli --help
 ```
 
 ## Commands
