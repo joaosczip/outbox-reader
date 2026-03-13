@@ -39,7 +39,7 @@ export class MockOutboxRepository {
 
 	// Test helper methods
 	addRecord(record: OutboxRecord): void {
-		this.records.set(record.id!, record);
+		this.records.set(record.id ?? "", record);
 	}
 
 	getRecord(id: string): OutboxRecord | undefined {

@@ -4,11 +4,11 @@ export interface MockChangeData {
 	kind?: "insert" | "update" | "delete";
 	table?: string;
 	columnnames?: string[];
-	columnvalues?: any[];
+	columnvalues?: unknown[];
 }
 
-export class Wal2JsonTestHelper {
-	static createMockChange(data: MockChangeData): Wal2Json.Change {
+export const Wal2JsonTestHelper = {
+	createMockChange(data: MockChangeData): Wal2Json.Change {
 		return {
 			kind: data.kind || "insert",
 			table: data.table || "outbox",
@@ -20,23 +20,23 @@ export class Wal2JsonTestHelper {
 			columndefaults: [],
 			columnoptionals: [],
 		} as Wal2Json.Change;
-	}
+	},
 
-	static createMockOutput(changes: MockChangeData[]): Wal2Json.Output {
+	createMockOutput(changes: MockChangeData[]): Wal2Json.Output {
 		return {
 			nextlsn: "0/1234567",
 			origin: 1,
 			timestamp: "2023-01-01 00:00:00",
-			change: changes.map((change) => this.createMockChange(change)),
+			change: changes.map((change) => Wal2JsonTestHelper.createMockChange(change)),
 		} as unknown as Wal2Json.Output;
-	}
+	},
 
-	static createOutboxInsert(data: {
+	createOutboxInsert(data: {
 		id: string;
 		aggregateId: string;
 		aggregateType: string;
 		eventType: string;
-		payload?: any;
+		payload?: unknown;
 		status?: string;
 		attempts?: number;
 		createdAt?: string;
@@ -71,5 +71,5 @@ export class Wal2JsonTestHelper {
 				data.sequenceNumber || null,
 			],
 		};
-	}
-}
+	},
+};

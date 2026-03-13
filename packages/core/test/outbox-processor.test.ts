@@ -1,5 +1,7 @@
+import type { Logger } from "../src/logger";
 import { OutboxRecord, OutboxStatus } from "../src/models/outbox-record";
 import { OutboxProcessor } from "../src/outbox-processor";
+import type { OutboxRepository } from "../src/outbox-repository";
 import { MockLogger } from "./mocks/mock-logger";
 import { MockOutboxRepository } from "./mocks/mock-outbox-repository";
 import { MockPublisher } from "./mocks/mock-publisher";
@@ -17,8 +19,8 @@ describe("OutboxProcessor", () => {
 		mockLogger = new MockLogger();
 
 		processor = new OutboxProcessor({
-			outboxRepository: mockRepository as any,
-			logger: mockLogger as any,
+			outboxRepository: mockRepository as unknown as OutboxRepository,
+			logger: mockLogger as unknown as Logger,
 		});
 	});
 
@@ -902,7 +904,7 @@ describe("OutboxProcessor", () => {
 				{
 					kind: "insert",
 					table: "outbox",
-					columnnames: undefined as any,
+					columnnames: undefined as unknown as string[],
 					columnvalues: ["test-id", "user-123"],
 				},
 				// Empty columnnames

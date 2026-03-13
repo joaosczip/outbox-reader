@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { Pool, type PoolClient } from "pg";
-import { OutboxClient } from "../src/outbox-client";
 import { PrismaAdapter, type PrismaTransactionClient } from "../src/adapters/prisma-adapter";
 import { OutboxStatus } from "../src/models/outbox-status";
+import { OutboxClient } from "../src/outbox-client";
 
 const TEST_DB_URL = "postgres://root:root@localhost:5433/ecomm-be";
 
