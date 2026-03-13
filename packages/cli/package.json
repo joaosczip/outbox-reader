@@ -14,22 +14,11 @@
 	"bugs": {
 		"url": "https://github.com/joaosczip/outbox-reader/issues"
 	},
-	"keywords": [
-		"outbox",
-		"transactional-outbox",
-		"prisma",
-		"postgres",
-		"schema"
-	],
+	"keywords": ["outbox", "transactional-outbox", "prisma", "postgres", "schema"],
 	"engines": {
 		"bun": ">=1.2.0"
 	},
-	"files": [
-		"dist/src",
-		"bin",
-		"README.md",
-		"LICENSE"
-	],
+	"files": ["dist/src", "bin", "README.md", "LICENSE"],
 	"publishConfig": {
 		"access": "public"
 	},

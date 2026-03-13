@@ -28,22 +28,11 @@
 	"bugs": {
 		"url": "https://github.com/joaosczip/outbox-reader/issues"
 	},
-	"keywords": [
-		"outbox",
-		"transactional-outbox",
-		"prisma",
-		"sequelize",
-		"postgres",
-		"client"
-	],
+	"keywords": ["outbox", "transactional-outbox", "prisma", "sequelize", "postgres", "client"],
 	"engines": {
 		"bun": ">=1.2.0"
 	},
-	"files": [
-		"dist/src",
-		"README.md",
-		"LICENSE"
-	],
+	"files": ["dist/src", "README.md", "LICENSE"],
 	"publishConfig": {
 		"access": "public"
 	},
