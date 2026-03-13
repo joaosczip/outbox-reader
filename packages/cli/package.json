@@ -2,12 +2,36 @@
 	"name": "@outbox-reader/cli",
 	"version": "1.0.0",
 	"description": "Outbox Reader developer tooling — Prisma schema generator and CLI",
-	"main": "dist/index.js",
-	"types": "dist/index.d.ts",
-	"private": true,
-	"license": "UNLICENSED",
+	"main": "dist/src/index.js",
+	"types": "dist/src/index.d.ts",
+	"license": "MIT",
+	"author": "João Sczip",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/joaosczip/outbox-reader"
+	},
+	"homepage": "https://github.com/joaosczip/outbox-reader#readme",
+	"bugs": {
+		"url": "https://github.com/joaosczip/outbox-reader/issues"
+	},
+	"keywords": [
+		"outbox",
+		"transactional-outbox",
+		"prisma",
+		"postgres",
+		"schema"
+	],
 	"engines": {
 		"bun": ">=1.2.0"
+	},
+	"files": [
+		"dist/src",
+		"bin",
+		"README.md",
+		"LICENSE"
+	],
+	"publishConfig": {
+		"access": "public"
 	},
 	"bin": {
 		"outbox": "./bin/outbox.js"
@@ -17,7 +41,8 @@
 		"generate": "bun src/cli/index.ts",
 		"cli": "bun src/cli/index.ts",
 		"lint": "biome check src/",
-		"test": "bun test"
+		"test": "bun test",
+		"prepublishOnly": "bun run build"
 	},
 	"dependencies": {
 		"pg": "^8.14.0",
