@@ -1,17 +1,17 @@
-# @outbox-reader/cli
+# @outy/cli
 
 Developer tooling for the Transactional Outbox pattern. Provides a CLI to generate Prisma schemas and set up PostgreSQL logical replication.
 
 ## Installation
 
 ```bash
-bun add @outbox-reader/cli
+bun add @outy/cli
 ```
 
 Or run directly without installing:
 
 ```bash
-bunx @outbox-reader/cli --help
+bunx @outy/cli --help
 ```
 
 ## Commands
@@ -90,7 +90,7 @@ model OutboxRecord {
 Connects to a PostgreSQL instance and creates a logical replication slot using the `wal2json` plugin. This automates the manual step typically done after configuring `postgresql.conf`.
 
 ```
-outbox-schema setup-replication [options]
+outy setup-replication [options]
 
 Options:
   -h, --host       PostgreSQL host      [default: "localhost"]
@@ -120,7 +120,7 @@ CREATE USER outbox_user WITH LOGIN REPLICATION PASSWORD 'secret';
 **Example:**
 
 ```bash
-outbox-schema setup-replication \
+outy setup replication \
   -u outbox_user \
   -P secret \
   -d my_database \
@@ -134,7 +134,7 @@ If the slot already exists the command exits successfully with an informational 
 Generates a database migration for the outbox table. When no `--target` is given, it prints a plain SQL `CREATE TABLE` statement to stdout that you can run manually.
 
 ```
-outbox create migration [options]
+outy create migration [options]
 
 Options:
   -T, --target          Migration target: prisma | sequelize | sql  [default: sql (stdout)]
@@ -157,18 +157,18 @@ Options:
 
 ```bash
 # Print SQL to stdout (no ORM dependency)
-outbox create migration
+outy create migration
 
 # Save SQL to a file
-outbox create migration --output ./migrations/create_outbox.sql
+outy create migration --output ./migrations/create_outbox.sql
 
 # Append model to schema.prisma and run prisma migrate dev
-outbox create migration --target prisma
-outbox create migration --target prisma --schema-path ./database/schema.prisma
+outy create migration --target prisma
+outy create migration --target prisma --schema-path ./database/schema.prisma
 
 # Write a timestamped Sequelize migration file
-outbox create migration --target sequelize
-outbox create migration --target sequelize --migrations-path ./db/migrations
+outy create migration --target sequelize
+outy create migration --target sequelize --migrations-path ./db/migrations
 ```
 
 The SQL output looks like:
@@ -199,7 +199,7 @@ The Sequelize migration file is a standard `queryInterface.createTable` / `dropT
 Installs the `@outbox-reader/client` package using the auto-detected package manager.
 
 ```
-outbox setup client
+outy setup client
 ```
 
 The command detects the package manager by looking for lockfiles in the current directory:
@@ -215,7 +215,7 @@ The command detects the package manager by looking for lockfiles in the current 
 
 ```bash
 # Auto-detects package manager and installs @outbox-reader/client
-outbox setup client
+outy setup client
 ```
 
 ## Global flags

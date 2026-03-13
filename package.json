@@ -10,7 +10,7 @@
 		"start": "bun run --filter '@outbox-reader/core' start",
 		"reprocess-failed-events": "bun run --filter '@outbox-reader/core' reprocess-failed-events",
 		"check-pending-events": "bun run --filter '@outbox-reader/core' check-pending-events",
-		"schema:generate": "bun run --filter '@outbox-reader/cli' generate"
+		"schema:generate": "bun run --filter '@outy/cli' generate"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^1.9.4",

@@ -8,7 +8,7 @@ A service that implements the [Transactional Outbox Pattern](https://microservic
 |---------|------|-------------|
 | `packages/core` | `@outbox-reader/core` | Runtime service — WAL replication, event processing, NATS publishing, DB repository, cronjobs |
 | `packages/client` | `@outbox-reader/client` | ORM-agnostic client for creating transactional outbox events via adapters |
-| `packages/cli` | `@outbox-reader/cli` | Developer tooling — Prisma schema generator and CLI for setting up the outbox table |
+| `packages/cli` | `@outy/cli` | Developer tooling — Prisma schema generator and CLI for setting up the outbox table |
 
 The client and CLI have no dependency on core and can be used standalone.
 
@@ -29,15 +29,15 @@ bun run start
 
 ## CLI
 
-The `outbox` CLI sets up the replication infrastructure and the outbox table.
+The `outy` CLI sets up the replication infrastructure and the outbox table.
 
 ```
-outbox create schema     — add outbox model to schema.prisma (no migration)
-outbox create migration  — add model + run prisma migrate dev
-outbox setup replication — create a PostgreSQL logical replication slot
+outy create schema     — add outbox model to schema.prisma (no migration)
+outy create migration  — add model + run prisma migrate dev
+outy setup replication — create a PostgreSQL logical replication slot
 ```
 
-### `outbox setup replication`
+### `outy setup replication`
 
 #### Prerequisites
 
@@ -140,7 +140,7 @@ ALTER USER existing_user REPLICATION;
 
 **3. Install wal2json**
 
-`wal2json` is a PostgreSQL logical decoding plugin required for WAL replication. If it is missing, `outbox setup replication` will fail with `could not access file "wal2json": No such file or directory`.
+`wal2json` is a PostgreSQL logical decoding plugin required for WAL replication. If it is missing, `outy setup replication` will fail with `could not access file "wal2json": No such file or directory`.
 
 **Managed / bare-metal (Debian/Ubuntu):**
 
@@ -204,7 +204,7 @@ SELECT * FROM pg_available_extensions WHERE name = 'wal2json';
 #### Example
 
 ```sh
-$ outbox setup replication -h 127.0.0.1 -p 5434 -u postgres -P postgres -d my-db -s my-db-slot
+$ outy setup replication -h 127.0.0.1 -p 5434 -u postgres -P postgres -d my-db -s my-db-slot
 ```
 
 You should receive the following output:
@@ -213,7 +213,7 @@ You should receive the following output:
 Replication slot "my-db-slot" created successfully.
 ```
 
-### `outbox create schema`
+### `outy create schema`
 
 ```
 -s, --schema-path   Path to schema.prisma      [default: ./prisma/schema.prisma]
@@ -222,7 +222,7 @@ Replication slot "my-db-slot" created successfully.
 -c, --config        Path to configuration file
 ```
 
-### `outbox create migration`
+### `outy create migration`
 
 ```
 -s, --schema-path   Path to schema.prisma      [default: ./prisma/schema.prisma]

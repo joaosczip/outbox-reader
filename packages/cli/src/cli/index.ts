@@ -6,7 +6,7 @@ import * as create from "./commands/create/index";
 import * as setup from "./commands/setup/index";
 
 yargs(hideBin(process.argv))
-	.scriptName("outbox")
+	.scriptName("outy")
 	.command(create)
 	.command(setup)
 	.demandCommand(1)

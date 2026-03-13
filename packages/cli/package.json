@@ -1,9 +1,8 @@
 {
-	"name": "@outbox-reader/cli",
+	"name": "@outy/cli",
 	"version": "0.0.1",
 	"description": "Outbox Reader developer tooling — Prisma schema generator and CLI",
 	"main": "dist/src/index.js",
-	"types": "dist/src/index.d.ts",
 	"license": "MIT",
 	"author": "João Sczip",
 	"repository": {
@@ -23,10 +22,10 @@
 		"access": "public"
 	},
 	"bin": {
-		"outbox": "./bin/outbox.js"
+		"outy": "./bin/outy.js"
 	},
 	"scripts": {
-		"build": "rm -rf dist && tsc -b",
+		"build": "rm -rf dist && bun build src/index.ts --outdir dist/src --target bun --external pg --external yargs && bun build src/cli/index.ts --outdir dist/src/cli --target bun --external pg --external yargs",
 		"generate": "bun src/cli/index.ts",
 		"cli": "bun src/cli/index.ts",
 		"lint": "biome check src/",
