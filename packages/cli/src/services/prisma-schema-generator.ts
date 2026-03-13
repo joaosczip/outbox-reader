@@ -151,25 +151,4 @@ datasource db {
 
 		console.log("🎉 Schema generation completed!");
 	}
-
-	/**
-	 * Generate a sample configuration file
-	 */
-	static async generateConfigFile(filePath = "./outbox-config.json"): Promise<void> {
-		const sampleConfig: SchemaGenerationConfig = {
-			schemaPath: "./prisma/schema.prisma",
-			modelName: "OutboxRecord",
-			tableName: "outbox",
-			generateMigration: true,
-			migrationName: "add_outbox_table",
-			customFields: {
-				// Example custom fields:
-				// tenantId: 'String?',
-				// version: 'Int @default(1)',
-			},
-		};
-
-		await Bun.write(filePath, JSON.stringify(sampleConfig, null, 2));
-		console.log(`✅ Sample configuration file created at ${filePath}`);
-	}
 }

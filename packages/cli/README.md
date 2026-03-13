@@ -73,35 +73,6 @@ model OutboxRecord {
 }
 ```
 
-### `generate-config`
-
-Writes a sample JSON config file you can customize and pass to `schema -c`.
-
-```
-outbox-schema generate-config [options]
-
-Options:
-  -o, --output  Output path for the config file  [default: "./outbox-config.json"]
-```
-
-**Example:**
-
-```bash
-outbox-schema generate-config -o ./config/outbox.json
-```
-
-Generated file:
-
-```json
-{
-  "schemaPath": "./prisma/schema.prisma",
-  "modelName": "OutboxRecord",
-  "tableName": "outbox",
-  "generateMigration": true,
-  "migrationName": "add_outbox_table",
-  "customFields": {}
-}
-```
 
 `customFields` lets you append extra Prisma fields to the model, e.g.:
 

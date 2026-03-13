@@ -34,7 +34,6 @@ The `outbox` CLI sets up the replication infrastructure and the outbox table.
 ```
 outbox create schema     — add outbox model to schema.prisma (no migration)
 outbox create migration  — add model + run prisma migrate dev
-outbox create config     — generate a sample outbox-config.json
 outbox setup replication — create a PostgreSQL logical replication slot
 ```
 
@@ -233,27 +232,6 @@ Replication slot "my-db-slot" created successfully.
 -c, --config        Path to configuration file
 ```
 
-### `outbox create config`
-
-```
--o, --output        Output path                 [default: ./outbox-config.json]
-```
-
-**Config file example:**
-
-```json
-{
-  "schemaPath": "./prisma/schema.prisma",
-  "modelName": "OutboxRecord",
-  "tableName": "outbox",
-  "generateMigration": true,
-  "migrationName": "add_outbox_table",
-  "customFields": {
-    "tenantId": "String?",
-    "version": "Int @default(1)"
-  }
-}
-```
 
 ### Manual SQL alternative
 
