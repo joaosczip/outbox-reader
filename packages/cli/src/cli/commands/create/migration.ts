@@ -60,7 +60,7 @@ export function builder(yargs: Argv): Argv<CreateMigrationArgs> {
 			alias: "o",
 			type: "string",
 			description: "Output file path for SQL (SQL only, defaults to stdout)",
-		}) as Argv<CreateMigrationArgs>;
+		}) as unknown as Argv<CreateMigrationArgs>;
 }
 
 export async function handler(argv: ArgumentsCamelCase<CreateMigrationArgs>): Promise<void> {

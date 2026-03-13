@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
 import { PrismaMigrationAdapter } from "../src/services/prisma-migration-adapter";
 import { PrismaSchemaGenerator } from "../src/services/prisma-schema-generator";
+import type { SchemaGenerationConfig } from "../src/types/schema-config";
 
 describe("PrismaMigrationAdapter", () => {
 	let adapter: PrismaMigrationAdapter;
@@ -23,7 +24,7 @@ describe("PrismaMigrationAdapter", () => {
 
 	it("passes schemaPath, modelName, tableName, migrationName, and configPath to the generator", async () => {
 		const constructorSpy = spyOn(
-			PrismaSchemaGenerator.prototype as unknown as Record<string, unknown>,
+			PrismaSchemaGenerator.prototype as unknown as { loadConfig: () => Required<SchemaGenerationConfig> },
 			"loadConfig",
 		).mockReturnValue({
 			schemaPath: "./custom/schema.prisma",

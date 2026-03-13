@@ -36,7 +36,7 @@ export function builder(yargs: Argv): Argv<CreateSchemaArgs> {
 			alias: "c",
 			type: "string",
 			description: "Path to configuration file",
-		}) as Argv<CreateSchemaArgs>;
+		}) as unknown as Argv<CreateSchemaArgs>;
 }
 
 export async function handler(argv: ArgumentsCamelCase<CreateSchemaArgs>): Promise<void> {
