@@ -18,20 +18,11 @@ export const config = {
 };
 
 export const natsConnectionConfig: NATSConnectionConfig = {
-	servers: getEnvOrDefault("NATS_SERVERS", "nats://localhost:4222").split(","),
-	name: getEnvOrDefault("NATS_CONNECTION_NAME", "outbox-reader"),
-	user: process.env.NATS_USER,
-	pass: process.env.NATS_PASSWORD,
-	token: process.env.NATS_TOKEN,
-	maxReconnectAttempts: process.env.NATS_MAX_RECONNECT_ATTEMPTS
-		? Number.parseInt(process.env.NATS_MAX_RECONNECT_ATTEMPTS)
-		: -1,
-	reconnectTimeWait: process.env.NATS_RECONNECT_TIME_WAIT
-		? Number.parseInt(process.env.NATS_RECONNECT_TIME_WAIT)
-		: 2000,
-	timeout: process.env.NATS_TIMEOUT ? Number.parseInt(process.env.NATS_TIMEOUT) : 20000,
-	verbose: process.env.NATS_VERBOSE === "true",
-	pedantic: process.env.NATS_PEDANTIC === "true",
+	servers: getEnvOrDefault("TARGET_NATS_URL", "nats://localhost:4222"),
+	name: "outbox-reader",
+	maxReconnectAttempts: -1,
+	reconnectTimeWait: 2000,
+	timeout: 20000,
 };
 
 export const dbWriteRetryConfig: RetryConfig = {
