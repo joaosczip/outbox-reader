@@ -3,6 +3,7 @@ import { Pool } from "pg";
 import type { Wal2Json } from "pg-logical-replication";
 
 import { config, dbWriteRetryConfig, natsConnectionConfig, natsPublisherRetryConfig } from "./config";
+import { startHealthServer } from "./health";
 import { Logger } from "./logger";
 import { NATSPublisher } from "./nats-publisher";
 import { OutboxProcessor } from "./outbox-processor";
@@ -10,6 +11,8 @@ import { OutboxRepository } from "./outbox-repository";
 import { startReplication } from "./replication";
 
 const logger = new Logger("outbox-reader");
+startHealthServer(); // binds PORT env var (default 4599)
+
 const pool = new Pool({ connectionString: config.connectionString });
 const outboxRepository = new OutboxRepository({
 	pool,
