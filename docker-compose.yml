@@ -29,6 +29,30 @@ services:
             - jetstream:/data/jetstream
         command: ["-c", "/etc/nats/nats.conf"]
 
+    outbox-reader:
+        build:
+            context: .
+            dockerfile: packages/core/Dockerfile
+        container_name: outbox-reader
+        restart: on-failure
+        depends_on:
+            - db
+            - nats
+        environment:
+            DATABASE_URL: postgres://root:root@ecomm-be-pg:5432/ecomm-be?replication=database
+            REPLICATION_SLOT_NAME: outbox_slot
+            TARGET_NATS_URL: nats://ecomm-be-nats:4222
+            PORT: "4599"
+            LOG_LEVEL: info
+        ports:
+            - "4599:4599"
+        healthcheck:
+            test: ["CMD", "wget", "-qO-", "http://localhost:4599/health"]
+            interval: 10s
+            timeout: 5s
+            retries: 5
+            start_period: 15s
+
 volumes:
     pgdata:
     jetstream:
