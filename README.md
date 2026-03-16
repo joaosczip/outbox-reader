@@ -250,6 +250,76 @@ CREATE TABLE outbox (
 );
 ```
 
+## Docker setup
+
+The included `docker-compose.yml` starts PostgreSQL (with `wal2json`), NATS JetStream, and the `outbox-reader` service together.
+
+### Prerequisites
+
+- Docker and Docker Compose v2+
+- `Dockerfile.pg` — custom Postgres image with `wal2json` baked in (see the [wal2json section](#3-install-wal2json) above)
+- `pg.conf` — PostgreSQL config with `wal_level = logical` (see below)
+- `nats.conf` — NATS config with JetStream enabled (see below)
+
+### `pg.conf` (minimum)
+
+```
+wal_level = logical
+max_wal_senders = 10
+max_replication_slots = 10
+```
+
+### `nats.conf` (minimum)
+
+```
+jetstream {
+  store_dir: /data/jetstream
+}
+```
+
+### Starting everything
+
+```bash
+docker compose up -d
+```
+
+This starts three services:
+
+| Service | Container | Ports |
+|---|---|---|
+| PostgreSQL | `ecomm-be-pg` | `5433:5432` |
+| NATS | `ecomm-be-nats` | `4222`, `8222` |
+| outbox-reader | `outbox-reader` | `4599` (health) |
+
+`outbox-reader` depends on both `db` and `nats` and will restart on failure. Its health is checked via `GET /health` on port `4599`.
+
+### Environment variables for the outbox-reader container
+
+The compose file sets these defaults — override them to match your setup:
+
+| Variable | Default in compose |
+|---|---|
+| `DATABASE_URL` | `postgres://root:root@ecomm-be-pg:5432/ecomm-be?replication=database` |
+| `REPLICATION_SLOT_NAME` | `outbox_slot` |
+| `TARGET_NATS_URL` | `nats://ecomm-be-nats:4222` |
+| `PORT` | `4599` |
+| `LOG_LEVEL` | `info` |
+
+### Running outbox-reader standalone (without compose)
+
+If you already have Postgres and NATS running elsewhere, build and run just the service:
+
+```bash
+docker build -f packages/core/Dockerfile -t outbox-reader .
+
+docker run -d \
+  -e DATABASE_URL="postgres://user:pass@host:5432/mydb?replication=database" \
+  -e REPLICATION_SLOT_NAME="my_slot" \
+  -e TARGET_NATS_URL="nats://nats-host:4222" \
+  -p 4599:4599 \
+  outbox-reader
+```
+
 ## Configuration
 
 Required environment variables:
