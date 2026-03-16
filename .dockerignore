@@ -1,0 +1,12 @@
+node_modules
+**/node_modules
+dist
+**/dist
+.git
+.env
+.env.local
+.env.*.local
+packages/cli/src
+packages/cli/test
+packages/core/test
+**/*.test.ts
