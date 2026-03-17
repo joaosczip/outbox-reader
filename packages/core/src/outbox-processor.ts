@@ -1,7 +1,7 @@
 import type { Wal2Json } from "pg-logical-replication";
 import type { Logger } from "./logger";
 import { type OutboxConstructor, OutboxRecord } from "./models/outbox-record";
-import type { OutboxRepository, OutboxRow } from "./outbox-repository";
+import type { OutboxRepository } from "./outbox-repository";
 import type { Publisher } from "./types";
 
 export class OutboxProcessor {
@@ -20,7 +20,7 @@ export class OutboxProcessor {
 	}: {
 		insertedRecord: OutboxRecord;
 		publisher: Publisher;
-		prefetchedOutbox?: OutboxRow | null;
+		prefetchedOutbox?: OutboxRecord | null;
 	}) {
 		try {
 			const outbox =
@@ -45,7 +45,7 @@ export class OutboxProcessor {
 			}
 
 			const sequenceNumber = await publisher.publish({
-				record: outbox as unknown as OutboxRecord,
+				record: outbox,
 				retry: (e, attempts) => {
 					this.logger.error({
 						message: "Error publishing NATS message",

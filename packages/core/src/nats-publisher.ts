@@ -61,8 +61,10 @@ export class NATSPublisher implements Publisher {
 					aggregateType: record.aggregateType,
 				},
 			});
+			const payload =
+				typeof record.payload === "string" ? record.payload : JSON.stringify(record.payload);
 			const { seq } = await backOff(
-				async () => jc.publish(record.eventType, record.payload as string, { msgID: record.aggregateId }),
+				async () => jc.publish(record.eventType, payload, { msgID: record.aggregateId }),
 				{
 					maxDelay: this.retryConfig.maxDelayInMs,
 					numOfAttempts: this.retryConfig.numOfAttempts,
