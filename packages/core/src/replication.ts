@@ -17,4 +17,5 @@ export const startReplication = async ({ connectionString, slotName, onChange }:
 	replicationService.on("data", async (_, log: Wal2Json.Output) => onChange(log));
 
 	await replicationService.subscribe(plugin, slotName);
+	return replicationService;
 };
