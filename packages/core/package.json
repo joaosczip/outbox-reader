@@ -26,7 +26,7 @@
 		"nats": "^2.29.1",
 		"p-all": "^5.0.1",
 		"pg": "^8.14.0",
-		"pg-logical-replication": "^2.0.7",
+		"pg-logical-replication": "^2.3.1",
 		"pino": "^9.6.0"
 	},
 	"devDependencies": {

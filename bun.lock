@@ -56,7 +56,7 @@
         "nats": "^2.29.1",
         "p-all": "^5.0.1",
         "pg": "^8.14.0",
-        "pg-logical-replication": "^2.0.7",
+        "pg-logical-replication": "^2.3.1",
         "pino": "^9.6.0",
       },
       "devDependencies": {
@@ -170,7 +170,7 @@
 
     "pg-int8": ["pg-int8@1.0.1", "", {}, "sha512-WCtabS6t3c8SkpDBUlb1kjOs7l66xsGdKpIPZsg4wR+B3+u9UAum2odSsF9tnvxg80h4ZxLWMy4pRjOsFIqQpw=="],
 
-    "pg-logical-replication": ["pg-logical-replication@2.0.7", "", { "dependencies": { "eventemitter2": ">=6.4.0", "pg": ">=6.2.2" } }, "sha512-G6fyOYN9jIz4RdKC2t2NrYp5nw8aZ7cMfH0BOISYwl4M16DWg8+LYQZbY8LMyGurmms6+igALbsgpnCOS9a5Fw=="],
+    "pg-logical-replication": ["pg-logical-replication@2.3.1", "", { "dependencies": { "eventemitter2": ">=6.4.0", "pg": ">=6.2.2" } }, "sha512-Q/V0CTJWmycynkdw3/5kUvgRXoiOd8DRxL1+ELrdbi8ZjEu9jKFSZYr/clo81MMnFUvwoDgFbUhs5YHibXE/JA=="],
 
     "pg-numeric": ["pg-numeric@1.0.2", "", {}, "sha512-BM/Thnrw5jm2kKLE5uJkXqqExRUY/toLHda65XgFTBTFYZyopbKjBe29Ii3RbkvlsMoFwD+tHeGaCjjv0gHlyw=="],
 
