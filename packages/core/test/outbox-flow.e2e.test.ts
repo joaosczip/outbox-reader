@@ -75,9 +75,7 @@ describe("Outbox Flow E2E", () => {
 		`);
 
 		// Clean up any stale replication slot from a previous failed run
-		await pool
-			.query("SELECT pg_drop_replication_slot($1)", [REPLICATION_SLOT])
-			.catch(() => {});
+		await pool.query("SELECT pg_drop_replication_slot($1)", [REPLICATION_SLOT]).catch(() => {});
 
 		// Set up NATS connection and JetStream
 		natsConn = await connect({ servers: NATS_URL });
@@ -144,9 +142,7 @@ describe("Outbox Flow E2E", () => {
 
 		// Clean up test records
 		if (insertedIds.length > 0) {
-			await pool
-				.query("DELETE FROM outbox WHERE id = ANY($1)", [insertedIds])
-				.catch(() => {});
+			await pool.query("DELETE FROM outbox WHERE id = ANY($1)", [insertedIds]).catch(() => {});
 		}
 
 		await natsPublisher?.close().catch(() => {});
@@ -156,9 +152,7 @@ describe("Outbox Flow E2E", () => {
 		await natsConn?.close().catch(() => {});
 
 		// Drop the test replication slot
-		await pool
-			.query("SELECT pg_drop_replication_slot($1)", [REPLICATION_SLOT])
-			.catch(() => {});
+		await pool.query("SELECT pg_drop_replication_slot($1)", [REPLICATION_SLOT]).catch(() => {});
 
 		await pool?.end().catch(() => {});
 	}, 15_000);
@@ -179,10 +173,7 @@ describe("Outbox Flow E2E", () => {
 
 		// Wait for the DB record to be marked as PROCESSED
 		const processedRecord = await waitFor(async () => {
-			const result = await pool.query(
-				"SELECT * FROM outbox WHERE id = $1 AND status = 'PROCESSED'",
-				[recordId],
-			);
+			const result = await pool.query("SELECT * FROM outbox WHERE id = $1 AND status = 'PROCESSED'", [recordId]);
 			return result.rows[0] || null;
 		});
 
@@ -251,10 +242,9 @@ describe("Outbox Flow E2E", () => {
 		});
 
 		// Verify all records are PROCESSED
-		const result = await pool.query(
-			"SELECT * FROM outbox WHERE id = ANY($1) ORDER BY created_at",
-			[records.map((r) => r.id)],
-		);
+		const result = await pool.query("SELECT * FROM outbox WHERE id = ANY($1) ORDER BY created_at", [
+			records.map((r) => r.id),
+		]);
 
 		expect(result.rows).toHaveLength(3);
 		for (const row of result.rows) {
