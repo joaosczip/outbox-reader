@@ -1,4 +1,5 @@
 import "dotenv/config";
+import pSettle from "p-settle";
 import { Pool } from "pg";
 import type { Wal2Json } from "pg-logical-replication";
 
@@ -13,7 +14,7 @@ import { startReplication } from "./replication";
 const logger = new Logger("outbox-reader");
 startHealthServer(); // binds PORT env var (default 4599)
 
-const pool = new Pool({ connectionString: config.connectionString });
+const pool = new Pool({ connectionString: config.connectionString, max: config.dbPoolSize });
 const outboxRepository = new OutboxRepository({
 	pool,
 	retryConfig: dbWriteRetryConfig,
@@ -28,17 +29,39 @@ const outboxProcessor = new OutboxProcessor({ outboxRepository, logger });
 
 const { connectionString, slotName } = config;
 
-const outboxReplication = startReplication({
-	connectionString,
-	slotName,
-	onChange: async (log: Wal2Json.Output) => {
-		const outboxRecords = outboxProcessor.filterChanges(log);
-		await Promise.all(
-			outboxRecords.map(async (record) =>
-				outboxProcessor.processInserts({ insertedRecord: record, publisher: natsPublisher }),
-			),
-		);
-	},
-});
+(async () => {
+	await natsPublisher.connect();
 
-outboxReplication.catch((error) => logger.error({ message: "Error starting replication", error }));
+	const outboxReplication = startReplication({
+		connectionString,
+		slotName,
+		onChange: async (log: Wal2Json.Output) => {
+			const outboxRecords = outboxProcessor.filterChanges(log);
+
+			const results = await pSettle(
+				outboxRecords.map(
+					(record) => () =>
+						outboxProcessor.processInserts({ insertedRecord: record, publisher: natsPublisher }),
+				),
+				{ concurrency: config.dbPoolSize },
+			);
+
+			if (config.processingFailureMode === "reprocess-after-delay") {
+				const failedRecords = outboxRecords.filter((_, i) => results[i].isRejected);
+
+				if (failedRecords.length) {
+					await new Promise((resolve) => setTimeout(resolve, config.failedEventsRetryDelayMs));
+					await pSettle(
+						failedRecords.map(
+							(record) => () =>
+								outboxProcessor.processInserts({ insertedRecord: record, publisher: natsPublisher }),
+						),
+						{ concurrency: config.dbPoolSize },
+					);
+				}
+			}
+		},
+	});
+
+	outboxReplication.catch((error) => logger.error({ message: "Error starting replication", error }));
+})();

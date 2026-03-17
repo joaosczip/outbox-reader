@@ -27,22 +27,28 @@ export class NATSPublisher implements Publisher {
 		this.connectionConfig = connectionConfig;
 	}
 
-	async publish({ record, retry }: { record: OutboxRecord; retry: RetryCallback }): Promise<number> {
-		if (!this.connection) {
-			this.logger.info({
-				message: "Establishing NATS connection",
-				extra: {
-					servers: this.connectionConfig.servers,
-					name: this.connectionConfig.name,
-				},
-			});
-
-			this.connection = await connect(this.connectionConfig);
-
-			this.logger.info({
-				message: "NATS connection established successfully",
-			});
+	async connect(): Promise<void> {
+		if (this.connection) {
+			return;
 		}
+
+		this.logger.info({
+			message: "Establishing NATS connection",
+			extra: {
+				servers: this.connectionConfig.servers,
+				name: this.connectionConfig.name,
+			},
+		});
+
+		this.connection = await connect(this.connectionConfig);
+
+		this.logger.info({
+			message: "NATS connection established successfully",
+		});
+	}
+
+	async publish({ record, retry }: { record: OutboxRecord; retry: RetryCallback }): Promise<number> {
+		await this.connect();
 
 		const jc = jetstream(this.connection as unknown as Parameters<typeof jetstream>[0]);
 
