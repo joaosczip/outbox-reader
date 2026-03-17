@@ -9,9 +9,10 @@ type StartReplicationParams = {
 export const startReplication = async ({ connectionString, slotName, onChange }: StartReplicationParams) => {
 	const plugin = new Wal2JsonPlugin();
 
-	const replicationService = new LogicalReplicationService({
-		connectionString: `${connectionString}?replication=database`,
-	});
+	const replicationService = new LogicalReplicationService(
+		{ connectionString: `${connectionString}?replication=database` },
+		{ flowControl: { enabled: true } },
+	);
 
 	replicationService.on("data", async (_, log: Wal2Json.Output) => onChange(log));
 
