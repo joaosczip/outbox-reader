@@ -1,7 +1,7 @@
 import type { Wal2Json } from "pg-logical-replication";
 import type { Logger } from "./logger";
 import { type OutboxConstructor, OutboxRecord } from "./models/outbox-record";
-import type { OutboxRepository } from "./outbox-repository";
+import type { OutboxRepository, OutboxRow } from "./outbox-repository";
 import type { Publisher } from "./types";
 
 export class OutboxProcessor {
@@ -16,12 +16,17 @@ export class OutboxProcessor {
 	async processInserts({
 		insertedRecord: record,
 		publisher,
+		prefetchedOutbox,
 	}: {
 		insertedRecord: OutboxRecord;
 		publisher: Publisher;
+		prefetchedOutbox?: OutboxRow | null;
 	}) {
 		try {
-			const outbox = await this.outboxRepository.findUnprocessedById(record.id as string);
+			const outbox =
+				prefetchedOutbox !== undefined
+					? prefetchedOutbox
+					: await this.outboxRepository.findUnprocessedById(record.id as string);
 
 			if (!outbox || outbox.status === "PROCESSED") {
 				this.logger.info({

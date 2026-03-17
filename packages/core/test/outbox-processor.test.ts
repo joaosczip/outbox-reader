@@ -271,6 +271,110 @@ describe("OutboxProcessor", () => {
 			});
 		});
 
+		describe("prefetched outbox (batch path)", () => {
+			it("should use prefetchedOutbox and skip the repository read", async () => {
+				// Arrange
+				const record = new OutboxRecord({
+					id: "prefetch-id",
+					aggregateId: "user-123",
+					aggregateType: "User",
+					eventType: "user.created",
+					payload: { name: "John" },
+					status: OutboxStatus.PENDING,
+					attempts: 0,
+				});
+
+				// Act — pass the record as prefetchedOutbox, NOT added to mock repository
+				await processor.processInserts({
+					insertedRecord: record,
+					prefetchedOutbox: record as never,
+					publisher: mockPublisher,
+				});
+
+				// Assert — no individual DB read was issued
+				expect(mockRepository.findUnprocessedByIdCalls).toHaveLength(0);
+				expect(mockPublisher.publishedRecords).toHaveLength(1);
+				expect(mockRepository.markAsProcessedCalls).toHaveLength(1);
+			});
+
+			it("should skip publish when prefetchedOutbox is null (record not in DB)", async () => {
+				// Arrange
+				const record = new OutboxRecord({
+					id: "not-found-id",
+					aggregateId: "user-999",
+					aggregateType: "User",
+					eventType: "user.created",
+					payload: {},
+					status: OutboxStatus.PENDING,
+					attempts: 0,
+				});
+
+				// Act — null means the batch fetch found no matching row
+				await processor.processInserts({
+					insertedRecord: record,
+					prefetchedOutbox: null,
+					publisher: mockPublisher,
+				});
+
+				// Assert
+				expect(mockRepository.findUnprocessedByIdCalls).toHaveLength(0);
+				expect(mockPublisher.publishedRecords).toHaveLength(0);
+				expect(mockRepository.markAsProcessedCalls).toHaveLength(0);
+				expect(mockRepository.markAsFailedCalls).toHaveLength(0);
+			});
+
+			it("should skip publish when prefetchedOutbox has PROCESSED status", async () => {
+				// Arrange
+				const record = new OutboxRecord({
+					id: "already-done-id",
+					aggregateId: "user-321",
+					aggregateType: "User",
+					eventType: "user.updated",
+					payload: {},
+					status: OutboxStatus.PROCESSED,
+					attempts: 1,
+				});
+
+				// Act
+				await processor.processInserts({
+					insertedRecord: record,
+					prefetchedOutbox: record as never,
+					publisher: mockPublisher,
+				});
+
+				// Assert
+				expect(mockRepository.findUnprocessedByIdCalls).toHaveLength(0);
+				expect(mockPublisher.publishedRecords).toHaveLength(0);
+			});
+
+			it("should mark record as failed using prefetchedOutbox on publish error", async () => {
+				// Arrange
+				const record = new OutboxRecord({
+					id: "prefetch-fail-id",
+					aggregateId: "user-fail",
+					aggregateType: "User",
+					eventType: "user.created",
+					payload: {},
+					status: OutboxStatus.PENDING,
+					attempts: 0,
+				});
+
+				mockPublisher.setError(new Error("NATS unavailable"));
+
+				// Act
+				await processor.processInserts({
+					insertedRecord: record,
+					prefetchedOutbox: record as never,
+					publisher: mockPublisher,
+				});
+
+				// Assert
+				expect(mockRepository.findUnprocessedByIdCalls).toHaveLength(0);
+				expect(mockRepository.markAsFailedCalls).toHaveLength(1);
+				expect(mockRepository.markAsFailedCalls[0].id).toBe("prefetch-fail-id");
+			});
+		});
+
 		describe("retry behavior verification", () => {
 			it("should pass retry callback to publisher", async () => {
 				// Arrange

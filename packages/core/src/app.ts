@@ -38,10 +38,18 @@ const { connectionString, slotName } = config;
 		onChange: async (log: Wal2Json.Output) => {
 			const outboxRecords = outboxProcessor.filterChanges(log);
 
+			const ids = outboxRecords.map((r) => r.id as string);
+			const fetchedRecords = await outboxRepository.findUnprocessedByIds(ids);
+			const fetchedMap = new Map(fetchedRecords.map((r) => [r.id, r]));
+
 			await pAll(
 				outboxRecords.map(
 					(record) => () =>
-						outboxProcessor.processInserts({ insertedRecord: record, publisher: natsPublisher }),
+						outboxProcessor.processInserts({
+							insertedRecord: record,
+							prefetchedOutbox: fetchedMap.get(record.id as string) ?? null,
+							publisher: natsPublisher,
+						}),
 				),
 				{ concurrency: config.dbPoolSize },
 			);

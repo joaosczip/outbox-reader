@@ -28,14 +28,14 @@ export const natsConnectionConfig: NATSConnectionConfig = {
 
 export const dbWriteRetryConfig: RetryConfig = {
 	jitter: "full",
-	maxDelayInMs: 5000,
-	numOfAttempts: 10,
-	startingDelayInMs: 300,
+	maxDelayInMs: 2000,
+	numOfAttempts: 5,
+	startingDelayInMs: 200,
 };
 
 export const natsPublisherRetryConfig: RetryConfig = {
 	jitter: "full",
-	maxDelayInMs: 10000,
-	numOfAttempts: 10,
-	startingDelayInMs: 1000,
+	maxDelayInMs: 5000,
+	numOfAttempts: 5,
+	startingDelayInMs: 500,
 };

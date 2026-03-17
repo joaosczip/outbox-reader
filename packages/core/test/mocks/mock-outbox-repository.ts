@@ -3,12 +3,21 @@ import { type OutboxRecord, OutboxStatus } from "../../src/models/outbox-record"
 export class MockOutboxRepository {
 	private records: Map<string, OutboxRecord> = new Map();
 	public findUnprocessedByIdCalls: string[] = [];
+	public findUnprocessedByIdsCalls: string[][] = [];
 	public markAsProcessedCalls: Array<{ id: string; sequenceNumber: number; attempts: number }> = [];
 	public markAsFailedCalls: Array<{ id: string; attempts: number }> = [];
 
 	async findUnprocessedById(id: string): Promise<OutboxRecord | null> {
 		this.findUnprocessedByIdCalls.push(id);
 		return this.records.get(id) || null;
+	}
+
+	async findUnprocessedByIds(ids: string[]): Promise<OutboxRecord[]> {
+		this.findUnprocessedByIdsCalls.push(ids);
+		return ids.flatMap((id) => {
+			const record = this.records.get(id);
+			return record ? [record] : [];
+		});
 	}
 
 	async markAsProcessed({
@@ -49,6 +58,7 @@ export class MockOutboxRepository {
 	reset(): void {
 		this.records.clear();
 		this.findUnprocessedByIdCalls = [];
+		this.findUnprocessedByIdsCalls = [];
 		this.markAsProcessedCalls = [];
 		this.markAsFailedCalls = [];
 	}

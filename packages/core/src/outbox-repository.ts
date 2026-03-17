@@ -7,7 +7,7 @@ import type { JitterType } from "exponential-backoff/dist/options";
 import { OutboxRecord } from "./models/outbox-record";
 import type { RetryCallback, RetryConfig } from "./types";
 
-type OutboxRow = {
+export type OutboxRow = {
 	id: string;
 	aggregate_id: string;
 	aggregate_type: string;
@@ -56,6 +56,18 @@ export class OutboxRepository {
 		`;
 		const result = await this.pool.query(query, [id]);
 		return result.rows[0] || null;
+	}
+
+	async findUnprocessedByIds(ids: string[]): Promise<OutboxRow[]> {
+		if (ids.length === 0) return [];
+		const query = `
+			SELECT id, aggregate_id, aggregate_type, event_type, payload, sequence_number,
+			       created_at, processed_at, status, attempts
+			FROM outbox
+			WHERE id = ANY($1) AND status IN ('PENDING', 'FAILED')
+		`;
+		const result = await this.pool.query(query, [ids]);
+		return result.rows;
 	}
 
 	async findFailedEvents(): Promise<OutboxRow[]> {
