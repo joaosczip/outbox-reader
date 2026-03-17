@@ -16,8 +16,6 @@ export const config = {
 	connectionString: getEnvOrThrow("DATABASE_URL"),
 	slotName: getEnvOrThrow("REPLICATION_SLOT_NAME"),
 	dbPoolSize: Number.parseInt(getEnvOrDefault("DB_POOL_SIZE", "10")),
-	processingFailureMode: getEnvOrDefault("PROCESSING_FAILURE_MODE", "abort") as "abort" | "reprocess-after-delay",
-	failedEventsRetryDelayMs: Number.parseInt(getEnvOrDefault("FAILED_EVENTS_RETRY_DELAY_MS", "5000")),
 };
 
 export const natsConnectionConfig: NATSConnectionConfig = {

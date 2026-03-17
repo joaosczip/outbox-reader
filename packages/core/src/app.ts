@@ -1,5 +1,5 @@
 import "dotenv/config";
-import pSettle from "p-settle";
+import pAll from "p-all";
 import { Pool } from "pg";
 import type { Wal2Json } from "pg-logical-replication";
 
@@ -38,28 +38,13 @@ const { connectionString, slotName } = config;
 		onChange: async (log: Wal2Json.Output) => {
 			const outboxRecords = outboxProcessor.filterChanges(log);
 
-			const results = await pSettle(
+			await pAll(
 				outboxRecords.map(
 					(record) => () =>
 						outboxProcessor.processInserts({ insertedRecord: record, publisher: natsPublisher }),
 				),
 				{ concurrency: config.dbPoolSize },
 			);
-
-			if (config.processingFailureMode === "reprocess-after-delay") {
-				const failedRecords = outboxRecords.filter((_, i) => results[i].isRejected);
-
-				if (failedRecords.length) {
-					await new Promise((resolve) => setTimeout(resolve, config.failedEventsRetryDelayMs));
-					await pSettle(
-						failedRecords.map(
-							(record) => () =>
-								outboxProcessor.processInserts({ insertedRecord: record, publisher: natsPublisher }),
-						),
-						{ concurrency: config.dbPoolSize },
-					);
-				}
-			}
 		},
 	});
 
