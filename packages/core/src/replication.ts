@@ -11,7 +11,7 @@ export const startReplication = async ({ connectionString, slotName, onChange }:
 
 	const replicationService = new LogicalReplicationService(
 		{ connectionString: `${connectionString}?replication=database` },
-		{ flowControl: { enabled: true } },
+		{ flowControl: { enabled: true }, acknowledge: { auto: true, timeoutSeconds: 0 } },
 	);
 
 	replicationService.on("data", async (_, log: Wal2Json.Output) => onChange(log));
