@@ -3,7 +3,7 @@ import pAll from "p-all";
 import { Pool } from "pg";
 import type { LogicalReplicationService, Wal2Json } from "pg-logical-replication";
 
-import { config, dbWriteRetryConfig } from "./config";
+import { config, dbWriteRetryConfig, maxOutboxAttempts, retryQueueConfig } from "./config";
 import { startHealthServer } from "./health";
 import { Logger } from "./logger";
 import { OutboxProcessor } from "./outbox-processor";
@@ -11,6 +11,7 @@ import { OutboxRepository } from "./outbox-repository";
 import { loadPublisherConfig } from "./publisher-config";
 import { createPublisher } from "./publisher-factory";
 import { startReplication } from "./replication";
+import { RetryQueue } from "./retry-queue";
 import type { Publisher } from "./types";
 
 const logger = new Logger("outbox-reader");
@@ -22,9 +23,10 @@ const outboxRepository = new OutboxRepository({
 	retryConfig: dbWriteRetryConfig,
 });
 
-const outboxProcessor = new OutboxProcessor({ outboxRepository, logger, maxAttempts: config.maxAttempts });
+const outboxProcessor = new OutboxProcessor({ outboxRepository, logger, maxAttempts: maxOutboxAttempts });
 
 let publisher: Publisher | null = null;
+let retryQueue: RetryQueue | null = null;
 
 const { connectionString, slotName } = config;
 
@@ -54,6 +56,16 @@ async function shutdown(signal: string): Promise<void> {
 			logger.info({ message: "Replication service stopped" });
 		} catch (err) {
 			logger.error({ message: "Error stopping replication service", error: err });
+			errors.push(err);
+		}
+	}
+
+	// 2.5. Stop retry queue (clears pending timers; records mid-retry stay PENDING)
+	if (retryQueue) {
+		try {
+			retryQueue.stop();
+		} catch (err) {
+			logger.error({ message: "Error stopping retry queue", error: err });
 			errors.push(err);
 		}
 	}
@@ -91,6 +103,14 @@ process.once("SIGINT", () => shutdown("SIGINT"));
 
 	await publisher.connect();
 
+	retryQueue = new RetryQueue({
+		processor: outboxProcessor,
+		publisher: publisher as Publisher,
+		outboxRepository,
+		logger,
+		config: retryQueueConfig,
+	});
+
 	replicationService = await startReplication({
 		connectionString,
 		slotName,
@@ -103,14 +123,22 @@ process.once("SIGINT", () => shutdown("SIGINT"));
 
 			const activePublisher = publisher as Publisher;
 			await pAll(
-				outboxRecords.map(
-					(record) => () =>
-						outboxProcessor.processInserts({
+				outboxRecords.map((record) => async () => {
+					try {
+						await outboxProcessor.processInserts({
 							insertedRecord: record,
 							prefetchedOutbox: fetchedMap.get(record.id as string) ?? null,
 							publisher: activePublisher,
-						}),
-				),
+						});
+					} catch (error) {
+						logger.error({
+							message: `Outbox record ${record.id} failed on first attempt, enqueueing for retry`,
+							extra: { recordId: record.id },
+							error,
+						});
+						retryQueue?.enqueue(record);
+					}
+				}),
 				{ concurrency: config.dbPoolSize },
 			);
 		},

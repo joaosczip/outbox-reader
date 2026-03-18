@@ -1,6 +1,4 @@
-import type { Logger } from "./logger";
 import type { OutboxRecord } from "./models/outbox-record";
-import type { OutboxRepository } from "./outbox-repository";
 import type { Publisher, RetryConfig } from "./types";
 
 type ProcessorLike = {
@@ -9,6 +7,20 @@ type ProcessorLike = {
 		publisher: Publisher;
 		prefetchedOutbox?: OutboxRecord | null;
 	}) => Promise<void>;
+};
+
+type RepositoryLike = {
+	markAsFailed: (params: {
+		id: string;
+		attempts: number;
+		retry: (e: Error, attempts: number) => boolean;
+	}) => Promise<void>;
+};
+
+type LoggerLike = {
+	info: (data: { message: string; extra?: Record<string, unknown> }) => void;
+	warn: (data: { message: string; extra?: Record<string, unknown> }) => void;
+	error: (data: { message: string; extra?: Record<string, unknown>; error?: unknown }) => void;
 };
 
 type QueueEntry = {
@@ -24,8 +36,8 @@ export class RetryQueue {
 		private readonly deps: {
 			processor: ProcessorLike;
 			publisher: Publisher;
-			outboxRepository: OutboxRepository;
-			logger: Logger;
+			outboxRepository: RepositoryLike;
+			logger: LoggerLike;
 			config: RetryConfig;
 		},
 	) {}
@@ -85,7 +97,6 @@ export class RetryQueue {
 				this.deps.logger.warn({
 					message: `Outbox record ${record.id} failed, scheduling retry attempt ${nextAttempt + 1}`,
 					extra: { recordId: record.id, nextAttempt },
-					error,
 				});
 				this.schedule({ record, attempt: nextAttempt });
 			}

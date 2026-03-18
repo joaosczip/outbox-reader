@@ -61,7 +61,7 @@ describe("RetryQueue", () => {
 		mockProcessor.setShouldSucceed();
 		queue.enqueue(makeRecord("rec-1"));
 
-		await Bun.sleep(config.startingDelayInMs! + 30);
+		await Bun.sleep((config.startingDelayInMs ?? 50) + 30);
 
 		expect(mockProcessor.processInsertsCalls).toHaveLength(1);
 		expect(mockProcessor.processInsertsCalls[0].insertedRecord.id).toBe("rec-1");
@@ -71,7 +71,7 @@ describe("RetryQueue", () => {
 		mockProcessor.setShouldSucceed();
 		queue.enqueue(makeRecord("rec-2"));
 
-		await Bun.sleep(config.startingDelayInMs! + 30);
+		await Bun.sleep((config.startingDelayInMs ?? 50) + 30);
 
 		expect(mockProcessor.processInsertsCalls[0].prefetchedOutbox).toBeUndefined();
 	});
