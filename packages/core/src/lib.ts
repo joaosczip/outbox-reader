@@ -10,4 +10,14 @@ export * from "./types";
 export * from "./models/outbox-record";
 
 // Configuration exports
-export { config, dbWriteRetryConfig, natsPublisherRetryConfig, natsConnectionConfig } from "./config";
+export { config, dbWriteRetryConfig } from "./config";
+
+// Publisher config and factory
+export { loadPublisherConfig } from "./publisher-config";
+export { createPublisher } from "./publisher-factory";
+export type {
+	PublisherConfig,
+	NATSPublisherConfig,
+	SQSPublisherConfig,
+	KafkaPublisherConfig,
+} from "./publisher-config";

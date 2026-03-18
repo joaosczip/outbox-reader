@@ -1,0 +1,41 @@
+# Publisher configuration for outbox-reader
+# Copy to publisher.yaml and adjust values for your environment.
+# Point to it via: PUBLISHER_CONFIG_PATH=./publisher.yaml (default)
+
+provider: nats  # Options: nats | sqs (not yet implemented) | kafka (not yet implemented)
+
+retryConfig:
+  numOfAttempts: 5
+  startingDelayInMs: 500
+  maxDelayInMs: 5000
+  jitter: full  # Options: full | none | fixed
+
+options:
+  # NATS connection options
+  servers: nats://localhost:4222
+  # For clustering, use a list:
+  # servers:
+  #   - nats://server1:4222
+  #   - nats://server2:4222
+  name: outbox-reader
+  maxReconnectAttempts: -1   # -1 = unlimited
+  reconnectTimeWait: 2000    # ms
+  timeout: 20000             # ms
+  # user: my-user
+  # pass: my-password
+  # token: my-token
+
+# --- SQS (not yet implemented) ---
+# provider: sqs
+# retryConfig: { numOfAttempts: 5, startingDelayInMs: 500, maxDelayInMs: 5000, jitter: full }
+# options:
+#   region: us-east-1
+#   queueUrl: https://sqs.us-east-1.amazonaws.com/123456789/my-queue
+
+# --- Kafka (not yet implemented) ---
+# provider: kafka
+# retryConfig: { numOfAttempts: 5, startingDelayInMs: 500, maxDelayInMs: 5000, jitter: full }
+# options:
+#   brokers:
+#     - localhost:9092
+#   clientId: outbox-reader

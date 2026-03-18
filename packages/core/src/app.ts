@@ -3,13 +3,15 @@ import pAll from "p-all";
 import { Pool } from "pg";
 import type { LogicalReplicationService, Wal2Json } from "pg-logical-replication";
 
-import { config, dbWriteRetryConfig, natsConnectionConfig, natsPublisherRetryConfig } from "./config";
+import { config, dbWriteRetryConfig } from "./config";
 import { startHealthServer } from "./health";
 import { Logger } from "./logger";
-import { NATSPublisher } from "./nats-publisher";
 import { OutboxProcessor } from "./outbox-processor";
 import { OutboxRepository } from "./outbox-repository";
+import { loadPublisherConfig } from "./publisher-config";
+import { createPublisher } from "./publisher-factory";
 import { startReplication } from "./replication";
+import type { Publisher } from "./types";
 
 const logger = new Logger("outbox-reader");
 const healthServer = startHealthServer(); // binds PORT env var (default 4599)
@@ -19,13 +21,10 @@ const outboxRepository = new OutboxRepository({
 	pool,
 	retryConfig: dbWriteRetryConfig,
 });
-const natsPublisher = new NATSPublisher({
-	logger,
-	retryConfig: natsPublisherRetryConfig,
-	connectionConfig: natsConnectionConfig,
-});
 
 const outboxProcessor = new OutboxProcessor({ outboxRepository, logger });
+
+let publisher: Publisher | null = null;
 
 const { connectionString, slotName } = config;
 
@@ -59,12 +58,14 @@ async function shutdown(signal: string): Promise<void> {
 		}
 	}
 
-	// 3. Close NATS
-	try {
-		await natsPublisher.close();
-	} catch (err) {
-		logger.error({ message: "Error closing NATS connection", error: err });
-		errors.push(err);
+	// 3. Close publisher
+	if (publisher) {
+		try {
+			await publisher.close();
+		} catch (err) {
+			logger.error({ message: "Error closing publisher connection", error: err });
+			errors.push(err);
+		}
 	}
 
 	// 4. End pg pool
@@ -85,7 +86,10 @@ process.once("SIGTERM", () => shutdown("SIGTERM"));
 process.once("SIGINT", () => shutdown("SIGINT"));
 
 (async () => {
-	await natsPublisher.connect();
+	const publisherConfig = await loadPublisherConfig(config.publisherConfigPath);
+	publisher = createPublisher(publisherConfig, logger);
+
+	await publisher.connect();
 
 	replicationService = await startReplication({
 		connectionString,
@@ -97,13 +101,14 @@ process.once("SIGINT", () => shutdown("SIGINT"));
 			const fetchedRecords = await outboxRepository.findUnprocessedByIds(ids);
 			const fetchedMap = new Map(fetchedRecords.map((r) => [r.id, r]));
 
+			const activePublisher = publisher as Publisher;
 			await pAll(
 				outboxRecords.map(
 					(record) => () =>
 						outboxProcessor.processInserts({
 							insertedRecord: record,
 							prefetchedOutbox: fetchedMap.get(record.id as string) ?? null,
-							publisher: natsPublisher,
+							publisher: activePublisher,
 						}),
 				),
 				{ concurrency: config.dbPoolSize },

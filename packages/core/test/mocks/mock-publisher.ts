@@ -14,6 +14,16 @@ export class MockPublisher implements Publisher {
 	public shouldFail = false;
 	public publishedSequenceNumber = 12345;
 	public errorToThrow: Error | null = null;
+	public connectCalls = 0;
+	public closeCalls = 0;
+
+	async connect(): Promise<void> {
+		this.connectCalls++;
+	}
+
+	async close(): Promise<void> {
+		this.closeCalls++;
+	}
 
 	async publish({ record, retry }: { record: OutboxRecord; retry: RetryCallback }): Promise<number> {
 		this.publishCalls.push({ record, retry });
@@ -34,6 +44,8 @@ export class MockPublisher implements Publisher {
 		this.shouldFail = false;
 		this.publishedSequenceNumber = 12345;
 		this.errorToThrow = null;
+		this.connectCalls = 0;
+		this.closeCalls = 0;
 	}
 
 	setSequenceNumber(seq: number): void {
