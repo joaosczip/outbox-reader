@@ -37,7 +37,7 @@ export class MockOutboxRepository {
 		}
 	}
 
-	async markAsFailed({ id, attempts }: { id: string; attempts: number }): Promise<void> {
+	async markAsFailed({ id, attempts }: { id: string; attempts: number; retry?: unknown }): Promise<void> {
 		this.markAsFailedCalls.push({ id, attempts });
 		const record = this.records.get(id);
 		if (record) {

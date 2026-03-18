@@ -26,3 +26,14 @@ export const dbWriteRetryConfig: RetryConfig = {
 	numOfAttempts: 5,
 	startingDelayInMs: 200,
 };
+
+export const retryQueueConfig: RetryConfig = {
+	jitter: "full",
+	maxDelayInMs: 10000,
+	numOfAttempts: 3,
+	startingDelayInMs: 1000,
+};
+
+export const maxOutboxAttempts = Number.parseInt(
+	getEnvOrDefault("MAX_OUTBOX_ATTEMPTS", "5"),
+);
