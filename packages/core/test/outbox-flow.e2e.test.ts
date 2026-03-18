@@ -95,7 +95,7 @@ describe("Outbox Flow E2E", () => {
 			retryConfig: natsRetryConfig,
 			connectionConfig: { servers: NATS_URL, name: "e2e-test-publisher" },
 		});
-		outboxProcessor = new OutboxProcessor({ outboxRepository, logger });
+		outboxProcessor = new OutboxProcessor({ outboxRepository, logger, maxAttempts: natsRetryConfig.numOfAttempts });
 
 		await natsPublisher.connect();
 

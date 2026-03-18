@@ -22,7 +22,7 @@ const outboxRepository = new OutboxRepository({
 	retryConfig: dbWriteRetryConfig,
 });
 
-const outboxProcessor = new OutboxProcessor({ outboxRepository, logger });
+const outboxProcessor = new OutboxProcessor({ outboxRepository, logger, maxAttempts: config.maxAttempts });
 
 let publisher: Publisher | null = null;
 

@@ -17,6 +17,7 @@ export const config = {
 	slotName: getEnvOrThrow("REPLICATION_SLOT_NAME"),
 	dbPoolSize: Number.parseInt(getEnvOrDefault("DB_POOL_SIZE", "10")),
 	publisherConfigPath: getEnvOrDefault("PUBLISHER_CONFIG_PATH", "./publisher.yaml"),
+	maxAttempts: Number.parseInt(getEnvOrDefault("MAX_ATTEMPTS", "5")),
 };
 
 export const dbWriteRetryConfig: RetryConfig = {

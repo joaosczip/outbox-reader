@@ -21,6 +21,7 @@ describe("OutboxProcessor", () => {
 		processor = new OutboxProcessor({
 			outboxRepository: mockRepository as unknown as OutboxRepository,
 			logger: mockLogger as unknown as Logger,
+			maxAttempts: 3,
 		});
 	});
 
@@ -145,7 +146,7 @@ describe("OutboxProcessor", () => {
 					eventType: "user.created",
 					payload: { name: "Max Attempts" },
 					status: OutboxStatus.PENDING,
-					attempts: 5, // More than publisher's max attempts (3)
+					attempts: 5, // More than processor maxAttempts (3)
 				});
 
 				mockRepository.addRecord(record);
@@ -171,7 +172,7 @@ describe("OutboxProcessor", () => {
 					eventType: "user.created",
 					payload: { name: "Exact Max" },
 					status: OutboxStatus.PENDING,
-					attempts: 3, // Equal to publisher's max attempts
+					attempts: 3, // Equal to processor maxAttempts
 				});
 
 				mockRepository.addRecord(record);
@@ -214,8 +215,7 @@ describe("OutboxProcessor", () => {
 		});
 
 		describe("error handling", () => {
-			it("should mark record as failed when publisher throws error", async () => {
-				// Arrange
+			it("should throw when publisher fails", async () => {
 				const record = new OutboxRecord({
 					id: "fail-id",
 					aggregateId: "user-111",
@@ -225,27 +225,18 @@ describe("OutboxProcessor", () => {
 					status: OutboxStatus.PENDING,
 					attempts: 1,
 				});
-
 				mockRepository.addRecord(record);
 				mockPublisher.setError(new Error("Network failure"));
 
-				// Act
-				await processor.processInserts({
-					insertedRecord: record,
-					publisher: mockPublisher,
-				});
+				await expect(
+					processor.processInserts({ insertedRecord: record, publisher: mockPublisher }),
+				).rejects.toThrow("Network failure");
 
-				// Assert
-				expect(mockRepository.markAsFailedCalls).toHaveLength(1);
-				expect(mockRepository.markAsFailedCalls[0]).toEqual({
-					id: "fail-id",
-					attempts: 1,
-				});
+				expect(mockRepository.markAsFailedCalls).toHaveLength(0);
 				expect(mockRepository.markAsProcessedCalls).toHaveLength(0);
 			});
 
-			it("should handle different types of publisher errors", async () => {
-				// Arrange
+			it("should propagate different types of publisher errors", async () => {
 				const record = new OutboxRecord({
 					id: "timeout-id",
 					aggregateId: "user-222",
@@ -255,19 +246,12 @@ describe("OutboxProcessor", () => {
 					status: OutboxStatus.PENDING,
 					attempts: 0,
 				});
-
 				mockRepository.addRecord(record);
 				mockPublisher.setError(new Error("Connection timeout"));
 
-				// Act
-				await processor.processInserts({
-					insertedRecord: record,
-					publisher: mockPublisher,
-				});
-
-				// Assert
-				expect(mockRepository.markAsFailedCalls).toHaveLength(1);
-				expect(mockRepository.markAsFailedCalls[0].id).toBe("timeout-id");
+				await expect(
+					processor.processInserts({ insertedRecord: record, publisher: mockPublisher }),
+				).rejects.toThrow("Connection timeout");
 			});
 		});
 
@@ -347,7 +331,7 @@ describe("OutboxProcessor", () => {
 				expect(mockPublisher.publishedRecords).toHaveLength(0);
 			});
 
-			it("should mark record as failed using prefetchedOutbox on publish error", async () => {
+			it("should throw on publish error when using prefetchedOutbox", async () => {
 				// Arrange
 				const record = new OutboxRecord({
 					id: "prefetch-fail-id",
@@ -361,69 +345,55 @@ describe("OutboxProcessor", () => {
 
 				mockPublisher.setError(new Error("NATS unavailable"));
 
-				// Act
-				await processor.processInserts({
-					insertedRecord: record,
-					prefetchedOutbox: record as never,
-					publisher: mockPublisher,
-				});
+				// Act & Assert
+				await expect(
+					processor.processInserts({
+						insertedRecord: record,
+						prefetchedOutbox: record as never,
+						publisher: mockPublisher,
+					}),
+				).rejects.toThrow("NATS unavailable");
 
-				// Assert
 				expect(mockRepository.findUnprocessedByIdCalls).toHaveLength(0);
-				expect(mockRepository.markAsFailedCalls).toHaveLength(1);
-				expect(mockRepository.markAsFailedCalls[0].id).toBe("prefetch-fail-id");
+				expect(mockRepository.markAsFailedCalls).toHaveLength(0);
 			});
 		});
 
-		describe("retry behavior verification", () => {
-			it("should call publisher with the outbox record", async () => {
-				// Arrange
+		describe("publish call shape", () => {
+			it("should call publisher with only the outbox record", async () => {
 				const record = new OutboxRecord({
-					id: "retry-test-id",
-					aggregateId: "user-retry",
+					id: "shape-test-id",
+					aggregateId: "user-shape",
 					aggregateType: "User",
 					eventType: "user.created",
-					payload: { name: "Retry Test" },
+					payload: {},
 					status: OutboxStatus.PENDING,
 					attempts: 0,
 				});
-
 				mockRepository.addRecord(record);
 
-				// Act
-				await processor.processInserts({
-					insertedRecord: record,
-					publisher: mockPublisher,
-				});
+				await processor.processInserts({ insertedRecord: record, publisher: mockPublisher });
 
-				// Assert
 				expect(mockPublisher.publishCalls).toHaveLength(1);
-				expect(mockPublisher.publishCalls[0].record).toBe(record);
+				expect(mockPublisher.publishCalls[0].record.id).toBe("shape-test-id");
 			});
 
-			it("should pass retry callback to repository operations", async () => {
-				// This test verifies that retry callbacks are provided to repository methods
-				// The behavior is tested indirectly through successful operations
+			it("should not call markAsFailed on success", async () => {
 				const record = new OutboxRecord({
-					id: "repo-retry-id",
-					aggregateId: "user-repo",
+					id: "success-id",
+					aggregateId: "user-ok",
 					aggregateType: "User",
 					eventType: "user.created",
-					payload: { name: "Repository Retry" },
+					payload: {},
 					status: OutboxStatus.PENDING,
 					attempts: 0,
 				});
-
 				mockRepository.addRecord(record);
 
-				// Act
-				await processor.processInserts({
-					insertedRecord: record,
-					publisher: mockPublisher,
-				});
+				await processor.processInserts({ insertedRecord: record, publisher: mockPublisher });
 
-				// Assert - verify the operation completed successfully
 				expect(mockRepository.markAsProcessedCalls).toHaveLength(1);
+				expect(mockRepository.markAsFailedCalls).toHaveLength(0);
 			});
 		});
 	});
@@ -720,16 +690,16 @@ describe("OutboxProcessor", () => {
 			// Simulate repository error during markAsProcessed
 			mockRepository.markAsProcessed = jest.fn().mockRejectedValue(new Error("Database connection lost"));
 
-			// Act
-			await processor.processInserts({
-				insertedRecord: record,
-				publisher: mockPublisher,
-			});
+			// Act & Assert - error propagates since there is no try/catch in processInserts
+			await expect(
+				processor.processInserts({
+					insertedRecord: record,
+					publisher: mockPublisher,
+				}),
+			).rejects.toThrow("Database connection lost");
 
-			// Assert - Should still have published but failed to mark as processed
+			// Published but failed to mark as processed
 			expect(mockPublisher.publishedRecords).toHaveLength(1);
-			expect(mockRepository.markAsFailedCalls).toHaveLength(1);
-			expect(mockRepository.markAsFailedCalls[0].id).toBe("repo-error-test");
 		});
 
 		it("should process multiple different event types correctly", async () => {

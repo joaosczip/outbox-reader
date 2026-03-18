@@ -7,10 +7,20 @@ import type { Publisher } from "./types";
 export class OutboxProcessor {
 	private outboxRepository: OutboxRepository;
 	private logger: Logger;
+	private maxAttempts: number;
 
-	constructor({ outboxRepository, logger }: { outboxRepository: OutboxRepository; logger: Logger }) {
+	constructor({
+		outboxRepository,
+		logger,
+		maxAttempts,
+	}: {
+		outboxRepository: OutboxRepository;
+		logger: Logger;
+		maxAttempts: number;
+	}) {
 		this.outboxRepository = outboxRepository;
 		this.logger = logger;
+		this.maxAttempts = maxAttempts;
 	}
 
 	async processInserts({
@@ -22,59 +32,42 @@ export class OutboxProcessor {
 		publisher: Publisher;
 		prefetchedOutbox?: OutboxRecord | null;
 	}) {
-		try {
-			const outbox =
-				prefetchedOutbox !== undefined
-					? prefetchedOutbox
-					: await this.outboxRepository.findUnprocessedById(record.id as string);
+		const outbox =
+			prefetchedOutbox !== undefined
+				? prefetchedOutbox
+				: await this.outboxRepository.findUnprocessedById(record.id as string);
 
-			if (!outbox || outbox.status === "PROCESSED") {
-				this.logger.info({
-					message: `Outbox record ${record.id} already processed`,
-					extra: { recordId: record.id },
-				});
-				return;
-			}
-
-			if (outbox.attempts >= publisher.retryConfig.numOfAttempts) {
-				this.logger.warn({
-					message: `Outbox record ${record.id} reached max attempts`,
-					extra: { recordId: record.id, attempts: outbox.attempts },
-				});
-				return;
-			}
-
-			const sequenceNumber = await publisher.publish({ record: outbox });
-
-			await this.outboxRepository.markAsProcessed({
-				id: outbox.id,
-				sequenceNumber,
-				attempts: outbox.attempts,
-				retry: (e, attempts) => {
-					this.logger.error({
-						message: `Error marking outbox record ${record.id} as processed`,
-						extra: { recordId: record.id, attempts },
-						error: e,
-					});
-					return true;
-				},
+		if (!outbox || outbox.status === "PROCESSED") {
+			this.logger.info({
+				message: `Outbox record ${record.id} already processed`,
+				extra: { recordId: record.id },
 			});
-		} catch (error) {
-			this.logger.error({ message: `Error processing outbox record ${record.id}`, error });
-
-			await this.outboxRepository.markAsFailed({
-				id: record.id as string,
-				attempts: record.attempts,
-				retry: (e, attempts) => {
-					this.logger.error({
-						message: `Error processing outbox record ${record.id}`,
-						extra: { recordId: record.id, attempts },
-						error: e,
-					});
-					return true;
-				},
-			});
+			return;
 		}
+
+		if (outbox.attempts >= this.maxAttempts) {
+			this.logger.warn({
+				message: `Outbox record ${record.id} reached max attempts`,
+				extra: { recordId: record.id, attempts: outbox.attempts },
+			});
+			return;
+		}
+
+		const sequenceNumber = await publisher.publish({ record: outbox });
+
+		await this.outboxRepository.markAsProcessed({
+			id: outbox.id,
+			sequenceNumber,
+			attempts: outbox.attempts,
+			retry: (e, attempts) => {
+				this.logger.error({
+					message: `Error marking outbox record ${record.id} as processed`,
+					extra: { recordId: record.id, attempts },
+					error: e,
+				});
+				return true;
+			},
+		});
 	}
 
 	filterChanges(log: Wal2Json.Output) {
