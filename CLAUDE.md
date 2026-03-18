@@ -2,6 +2,11 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Git Workflow (Mandatory)
+
+- **Never create commits** unless the user explicitly asks. The user is the only one who commits.
+- **Never add Claude as a co-author** in commit messages (no `Co-Authored-By: Claude` lines).
+
 ## Commands
 
 ```bash
