@@ -1,5 +1,5 @@
 import type { OutboxRecord } from "../../src/models/outbox-record";
-import type { Publisher, RetryCallback } from "../../src/types";
+import type { Publisher } from "../../src/types";
 
 export class MockPublisher implements Publisher {
 	public retryConfig = {
@@ -10,7 +10,7 @@ export class MockPublisher implements Publisher {
 	};
 
 	public publishedRecords: OutboxRecord[] = [];
-	public publishCalls: Array<{ record: OutboxRecord; retry: RetryCallback }> = [];
+	public publishCalls: Array<{ record: OutboxRecord }> = [];
 	public shouldFail = false;
 	public publishedSequenceNumber = 12345;
 	public errorToThrow: Error | null = null;
@@ -25,8 +25,8 @@ export class MockPublisher implements Publisher {
 		this.closeCalls++;
 	}
 
-	async publish({ record, retry }: { record: OutboxRecord; retry: RetryCallback }): Promise<number> {
-		this.publishCalls.push({ record, retry });
+	async publish({ record }: { record: OutboxRecord }): Promise<number> {
+		this.publishCalls.push({ record });
 
 		if (this.shouldFail) {
 			const error = this.errorToThrow || new Error("Publisher failed");

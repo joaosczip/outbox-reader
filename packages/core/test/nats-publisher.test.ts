@@ -103,7 +103,7 @@ describe("NATSPublisher", () => {
 				attempts: 0,
 			});
 
-			await publisher.publish({ record, retry: async () => true });
+			await publisher.publish({ record });
 
 			expect(connectSpy).toHaveBeenCalledTimes(1);
 		});

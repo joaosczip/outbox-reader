@@ -44,17 +44,7 @@ export class OutboxProcessor {
 				return;
 			}
 
-			const sequenceNumber = await publisher.publish({
-				record: outbox,
-				retry: (e, attempts) => {
-					this.logger.error({
-						message: "Error publishing NATS message",
-						extra: { recordId: record.id, attempts },
-						error: e,
-					});
-					return true;
-				},
-			});
+			const sequenceNumber = await publisher.publish({ record: outbox });
 
 			await this.outboxRepository.markAsProcessed({
 				id: outbox.id,

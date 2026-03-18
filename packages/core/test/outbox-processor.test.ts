@@ -376,7 +376,7 @@ describe("OutboxProcessor", () => {
 		});
 
 		describe("retry behavior verification", () => {
-			it("should pass retry callback to publisher", async () => {
+			it("should call publisher with the outbox record", async () => {
 				// Arrange
 				const record = new OutboxRecord({
 					id: "retry-test-id",
@@ -398,7 +398,7 @@ describe("OutboxProcessor", () => {
 
 				// Assert
 				expect(mockPublisher.publishCalls).toHaveLength(1);
-				expect(typeof mockPublisher.publishCalls[0].retry).toBe("function");
+				expect(mockPublisher.publishCalls[0].record).toBe(record);
 			});
 
 			it("should pass retry callback to repository operations", async () => {
@@ -668,7 +668,7 @@ describe("OutboxProcessor", () => {
 	});
 
 	describe("integration scenarios", () => {
-		it("should handle complete flow with retry callback execution", async () => {
+		it("should handle complete flow with publish and status update", async () => {
 			// Arrange
 			const record = new OutboxRecord({
 				id: "integration-test",

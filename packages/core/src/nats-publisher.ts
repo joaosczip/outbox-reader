@@ -1,11 +1,9 @@
 import { jetstream } from "@nats-io/jetstream";
-import { backOff } from "exponential-backoff";
 import { type NatsConnection, connect } from "nats";
 
-import type { JitterType } from "exponential-backoff/dist/options";
 import type { Logger } from "./logger";
 import type { OutboxRecord } from "./models/outbox-record";
-import type { NATSConnectionConfig, Publisher, RetryCallback, RetryConfig } from "./types";
+import type { NATSConnectionConfig, Publisher, RetryConfig } from "./types";
 
 export class NATSPublisher implements Publisher {
 	private connection: NatsConnection | null = null;
@@ -47,7 +45,7 @@ export class NATSPublisher implements Publisher {
 		});
 	}
 
-	async publish({ record, retry }: { record: OutboxRecord; retry: RetryCallback }): Promise<number> {
+	async publish({ record }: { record: OutboxRecord }): Promise<number> {
 		await this.connect();
 
 		const jc = jetstream(this.connection as unknown as Parameters<typeof jetstream>[0]);
@@ -62,16 +60,7 @@ export class NATSPublisher implements Publisher {
 				},
 			});
 			const payload = typeof record.payload === "string" ? record.payload : JSON.stringify(record.payload);
-			const { seq } = await backOff(
-				async () => jc.publish(record.eventType, payload, { msgID: record.aggregateId }),
-				{
-					maxDelay: this.retryConfig.maxDelayInMs,
-					numOfAttempts: this.retryConfig.numOfAttempts,
-					jitter: this.retryConfig.jitter as JitterType,
-					startingDelay: this.retryConfig.startingDelayInMs,
-					retry,
-				},
-			);
+			const { seq } = await jc.publish(record.eventType, payload, { msgID: record.aggregateId });
 
 			this.logger.info({
 				message: "Published message to NATS stream",
