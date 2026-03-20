@@ -1,4 +1,5 @@
 import path from "node:path";
+import { type ColumnNaming, applyNamingToTableName, getColumnNames } from "../utils/column-naming";
 import type { SequelizeMigrationOptions } from "../types/migration-adapter-config";
 import type { MigrationAdapter } from "./migration-adapter";
 
@@ -24,13 +25,16 @@ export class SequelizeMigrationAdapter implements MigrationAdapter {
 	async createMigration(options: SequelizeMigrationOptions): Promise<void> {
 		const migrationsPath = options.migrationsPath ?? this.discoverMigrationsPath(options.configPath);
 		const migrationName = options.migrationName ?? "create-outbox-table";
-		const tableName = options.tableName ?? "outbox";
+		const naming: ColumnNaming = options.columnNaming ?? "snake_case";
+		const rawTableName = options.tableName ?? "outbox";
+		const tableName = applyNamingToTableName(rawTableName, naming);
 
 		const timestamp = this.formatTimestamp(this.clock());
 		const filename = `${timestamp}-${migrationName}.js`;
 		const filePath = path.join(migrationsPath, filename);
 
-		const content = this.renderMigration(tableName);
+		const cols = getColumnNames(naming);
+		const content = this.renderMigration(tableName, cols);
 		await this.fsWriter(filePath, content);
 
 		console.log(`Created Sequelize migration at ${filePath}`);
@@ -64,7 +68,7 @@ export class SequelizeMigrationAdapter implements MigrationAdapter {
 		);
 	}
 
-	private renderMigration(tableName: string): string {
+	private renderMigration(tableName: string, cols: ReturnType<typeof getColumnNames>): string {
 		return `"use strict";
 
 module.exports = {
@@ -72,56 +76,56 @@ module.exports = {
     await queryInterface.sequelize.query('CREATE EXTENSION IF NOT EXISTS "pg_uuidv7"');
 
     await queryInterface.createTable("${tableName}", {
-      id: {
+      ${cols.id}: {
         type: Sequelize.UUID,
         primaryKey: true,
         allowNull: false,
         defaultValue: Sequelize.literal("uuid_generate_v7()"),
       },
-      aggregate_id: {
+      ${cols.aggregateId}: {
         type: Sequelize.STRING(50),
         allowNull: false,
       },
-      aggregate_type: {
+      ${cols.aggregateType}: {
         type: Sequelize.STRING(50),
         allowNull: false,
       },
-      event_type: {
+      ${cols.eventType}: {
         type: Sequelize.STRING(50),
         allowNull: false,
       },
-      payload: {
+      ${cols.payload}: {
         type: Sequelize.JSONB,
         allowNull: false,
       },
-      status: {
+      ${cols.status}: {
         type: Sequelize.TEXT,
         allowNull: false,
         defaultValue: "PENDING",
       },
-      attempts: {
+      ${cols.attempts}: {
         type: Sequelize.INTEGER,
         allowNull: false,
         defaultValue: 0,
       },
-      created_at: {
+      ${cols.createdAt}: {
         type: Sequelize.DATE,
         allowNull: false,
         defaultValue: Sequelize.fn("NOW"),
       },
-      processed_at: {
+      ${cols.processedAt}: {
         type: Sequelize.DATE,
         allowNull: true,
       },
-      sequence_number: {
+      ${cols.sequenceNumber}: {
         type: Sequelize.BIGINT,
         allowNull: true,
       },
     });
 
-    await queryInterface.addIndex("${tableName}", ["status"]);
-    await queryInterface.addIndex("${tableName}", ["created_at"]);
-    await queryInterface.addIndex("${tableName}", ["sequence_number"]);
+    await queryInterface.addIndex("${tableName}", ["${cols.status}"]);
+    await queryInterface.addIndex("${tableName}", ["${cols.createdAt}"]);
+    await queryInterface.addIndex("${tableName}", ["${cols.sequenceNumber}"]);
   },
 
   async down(queryInterface) {

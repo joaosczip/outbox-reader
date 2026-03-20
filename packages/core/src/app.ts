@@ -21,9 +21,17 @@ const pool = new Pool({ connectionString: config.connectionString, max: config.d
 const outboxRepository = new OutboxRepository({
 	pool,
 	retryConfig: dbWriteRetryConfig,
+	columnNaming: config.columnNaming,
+	tableName: config.tableName,
 });
 
-const outboxProcessor = new OutboxProcessor({ outboxRepository, logger, maxAttempts: maxOutboxAttempts });
+const outboxProcessor = new OutboxProcessor({
+	outboxRepository,
+	logger,
+	maxAttempts: maxOutboxAttempts,
+	columnNaming: config.columnNaming,
+	tableName: config.tableName,
+});
 
 let publisher: Publisher | null = null;
 let retryQueue: RetryQueue | null = null;

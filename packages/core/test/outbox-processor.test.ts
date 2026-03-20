@@ -637,6 +637,161 @@ describe("OutboxProcessor", () => {
 		});
 	});
 
+	describe("filterChanges - camelCase naming convention", () => {
+		let camelProcessor: OutboxProcessor;
+
+		beforeEach(() => {
+			camelProcessor = new OutboxProcessor({
+				outboxRepository: mockRepository as unknown as OutboxRepository,
+				logger: mockLogger as unknown as Logger,
+				maxAttempts: 3,
+				columnNaming: "camelCase",
+			});
+		});
+
+		it("maps camelCase WAL column names to entity properties", () => {
+			const walOutput = Wal2JsonTestHelper.createMockOutput([
+				{
+					kind: "insert",
+					table: "outbox",
+					columnnames: [
+						"id",
+						"aggregateId",
+						"aggregateType",
+						"eventType",
+						"payload",
+						"status",
+						"attempts",
+						"createdAt",
+						"processedAt",
+						"sequenceNumber",
+					],
+					columnvalues: [
+						"camel-id",
+						"agg-123",
+						"User",
+						"user.created",
+						'{"data":true}',
+						"PENDING",
+						0,
+						"2023-01-01 00:00:00",
+						null,
+						null,
+					],
+				},
+			]);
+
+			const result = camelProcessor.filterChanges(walOutput);
+
+			expect(result).toHaveLength(1);
+			expect(result[0].id).toBe("camel-id");
+			expect(result[0].aggregateId).toBe("agg-123");
+			expect(result[0].aggregateType).toBe("User");
+			expect(result[0].eventType).toBe("user.created");
+			expect(result[0].status).toBe("PENDING");
+		});
+
+		it("filters on the same table name (outbox is same in camelCase)", () => {
+			const walOutput = Wal2JsonTestHelper.createMockOutput([
+				{
+					kind: "insert",
+					table: "Outbox",
+					columnnames: ["id", "aggregateId"],
+					columnvalues: ["should-not-match", "agg"],
+				},
+				{
+					kind: "insert",
+					table: "outbox",
+					columnnames: ["id", "aggregateId", "aggregateType", "eventType"],
+					columnvalues: ["matches", "agg-1", "User", "user.created"],
+				},
+			]);
+
+			const result = camelProcessor.filterChanges(walOutput);
+
+			expect(result).toHaveLength(1);
+			expect(result[0].id).toBe("matches");
+		});
+	});
+
+	describe("filterChanges - PascalCase naming convention", () => {
+		let pascalProcessor: OutboxProcessor;
+
+		beforeEach(() => {
+			pascalProcessor = new OutboxProcessor({
+				outboxRepository: mockRepository as unknown as OutboxRepository,
+				logger: mockLogger as unknown as Logger,
+				maxAttempts: 3,
+				columnNaming: "PascalCase",
+				tableName: "outbox",
+			});
+		});
+
+		it("maps PascalCase WAL column names to entity properties", () => {
+			const walOutput = Wal2JsonTestHelper.createMockOutput([
+				{
+					kind: "insert",
+					table: "Outbox",
+					columnnames: [
+						"id",
+						"AggregateId",
+						"AggregateType",
+						"EventType",
+						"payload",
+						"status",
+						"attempts",
+						"CreatedAt",
+						"ProcessedAt",
+						"SequenceNumber",
+					],
+					columnvalues: [
+						"pascal-id",
+						"agg-456",
+						"Order",
+						"order.placed",
+						'{"total":100}',
+						"PENDING",
+						0,
+						"2023-06-01 10:00:00",
+						null,
+						42,
+					],
+				},
+			]);
+
+			const result = pascalProcessor.filterChanges(walOutput);
+
+			expect(result).toHaveLength(1);
+			expect(result[0].id).toBe("pascal-id");
+			expect(result[0].aggregateId).toBe("agg-456");
+			expect(result[0].aggregateType).toBe("Order");
+			expect(result[0].eventType).toBe("order.placed");
+			expect(result[0].sequenceNumber).toBe(42);
+		});
+
+		it("filters inserts on the PascalCase table name", () => {
+			const walOutput = Wal2JsonTestHelper.createMockOutput([
+				{
+					kind: "insert",
+					table: "outbox",
+					columnnames: ["id", "AggregateId"],
+					columnvalues: ["snake-table", "agg"],
+				},
+				{
+					kind: "insert",
+					table: "Outbox",
+					columnnames: ["id", "AggregateId", "AggregateType", "EventType"],
+					columnvalues: ["pascal-table", "agg-1", "User", "user.created"],
+				},
+			]);
+
+			const result = pascalProcessor.filterChanges(walOutput);
+
+			expect(result).toHaveLength(1);
+			expect(result[0].id).toBe("pascal-table");
+		});
+	});
+
 	describe("integration scenarios", () => {
 		it("should handle complete flow with publish and status update", async () => {
 			// Arrange

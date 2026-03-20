@@ -1,4 +1,5 @@
 import type { RetryConfig } from "./types";
+import type { ColumnNaming } from "./utils/column-naming";
 
 export const getEnvOrThrow = (key: string): string => {
 	const value = process.env[key];
@@ -17,6 +18,8 @@ export const config = {
 	slotName: getEnvOrThrow("REPLICATION_SLOT_NAME"),
 	dbPoolSize: Number.parseInt(getEnvOrDefault("DB_POOL_SIZE", "10")),
 	publisherConfigPath: getEnvOrDefault("PUBLISHER_CONFIG_PATH", "./publisher.yaml"),
+	columnNaming: getEnvOrDefault("COLUMN_NAMING", "snake_case") as ColumnNaming,
+	tableName: getEnvOrDefault("TABLE_NAME", "outbox"),
 };
 
 export const dbWriteRetryConfig: RetryConfig = {

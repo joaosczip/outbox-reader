@@ -159,6 +159,66 @@ describe("SequelizeMigrationAdapter", () => {
 		});
 	});
 
+	describe("createMigration - camelCase naming", () => {
+		it("uses camelCase column names in the migration content", async () => {
+			const { adapter, writtenFiles } = makeAdapter();
+
+			await adapter.createMigration({ target: "sequelize", columnNaming: "camelCase" });
+
+			const { content } = writtenFiles[0];
+			expect(content).toContain("aggregateId");
+			expect(content).toContain("aggregateType");
+			expect(content).toContain("eventType");
+			expect(content).toContain("sequenceNumber");
+			expect(content).toContain("createdAt");
+			expect(content).toContain("processedAt");
+			expect(content).not.toContain("aggregate_id");
+			expect(content).not.toContain("aggregate_type");
+			expect(content).not.toContain("event_type");
+		});
+
+		it("uses camelCase table name for multi-word table", async () => {
+			const { adapter, writtenFiles } = makeAdapter();
+
+			await adapter.createMigration({ target: "sequelize", tableName: "my_outbox", columnNaming: "camelCase" });
+
+			expect(writtenFiles[0].content).toContain('"myOutbox"');
+		});
+	});
+
+	describe("createMigration - PascalCase naming", () => {
+		it("uses PascalCase column names in the migration content", async () => {
+			const { adapter, writtenFiles } = makeAdapter();
+
+			await adapter.createMigration({ target: "sequelize", columnNaming: "PascalCase" });
+
+			const { content } = writtenFiles[0];
+			expect(content).toContain("AggregateId");
+			expect(content).toContain("AggregateType");
+			expect(content).toContain("EventType");
+			expect(content).toContain("SequenceNumber");
+			expect(content).toContain("CreatedAt");
+			expect(content).toContain("ProcessedAt");
+			expect(content).not.toContain("aggregate_id");
+		});
+
+		it("uses PascalCase table name", async () => {
+			const { adapter, writtenFiles } = makeAdapter();
+
+			await adapter.createMigration({ target: "sequelize", columnNaming: "PascalCase" });
+
+			expect(writtenFiles[0].content).toContain('"Outbox"');
+		});
+
+		it("uses PascalCase table name for multi-word table", async () => {
+			const { adapter, writtenFiles } = makeAdapter();
+
+			await adapter.createMigration({ target: "sequelize", tableName: "my_outbox", columnNaming: "PascalCase" });
+
+			expect(writtenFiles[0].content).toContain('"MyOutbox"');
+		});
+	});
+
 	describe("createMigration - custom table name", () => {
 		it("uses the provided table name in the migration", async () => {
 			const { adapter, writtenFiles } = makeAdapter();

@@ -56,6 +56,86 @@ describe("SqlMigrationAdapter", () => {
 		});
 	});
 
+	describe("createMigration - camelCase naming", () => {
+		it("uses camelCase column names in the SQL output", async () => {
+			const written: string[] = [];
+			const stdoutSpy = spyOn(process.stdout, "write").mockImplementation((chunk) => {
+				written.push(String(chunk));
+				return true;
+			});
+
+			await adapter.createMigration({ target: "sql", columnNaming: "camelCase" });
+
+			stdoutSpy.mockRestore();
+
+			const sql = written.join("");
+			expect(sql).toContain("CREATE TABLE IF NOT EXISTS outbox");
+			expect(sql).toContain("aggregateId");
+			expect(sql).toContain("aggregateType");
+			expect(sql).toContain("eventType");
+			expect(sql).toContain("sequenceNumber");
+			expect(sql).toContain("createdAt");
+			expect(sql).toContain("processedAt");
+			expect(sql).not.toContain("aggregate_id");
+			expect(sql).not.toContain("aggregate_type");
+			expect(sql).not.toContain("event_type");
+		});
+
+		it("uses camelCase table name when --table-name is provided", async () => {
+			const written: string[] = [];
+			const stdoutSpy = spyOn(process.stdout, "write").mockImplementation((chunk) => {
+				written.push(String(chunk));
+				return true;
+			});
+
+			await adapter.createMigration({ target: "sql", tableName: "my_outbox", columnNaming: "camelCase" });
+
+			stdoutSpy.mockRestore();
+
+			const sql = written.join("");
+			expect(sql).toContain("CREATE TABLE IF NOT EXISTS myOutbox");
+		});
+	});
+
+	describe("createMigration - PascalCase naming", () => {
+		it("uses PascalCase column names in the SQL output", async () => {
+			const written: string[] = [];
+			const stdoutSpy = spyOn(process.stdout, "write").mockImplementation((chunk) => {
+				written.push(String(chunk));
+				return true;
+			});
+
+			await adapter.createMigration({ target: "sql", columnNaming: "PascalCase" });
+
+			stdoutSpy.mockRestore();
+
+			const sql = written.join("");
+			expect(sql).toContain("CREATE TABLE IF NOT EXISTS Outbox");
+			expect(sql).toContain("AggregateId");
+			expect(sql).toContain("AggregateType");
+			expect(sql).toContain("EventType");
+			expect(sql).toContain("SequenceNumber");
+			expect(sql).toContain("CreatedAt");
+			expect(sql).toContain("ProcessedAt");
+			expect(sql).not.toContain("aggregate_id");
+		});
+
+		it("uses PascalCase table name when --table-name is provided", async () => {
+			const written: string[] = [];
+			const stdoutSpy = spyOn(process.stdout, "write").mockImplementation((chunk) => {
+				written.push(String(chunk));
+				return true;
+			});
+
+			await adapter.createMigration({ target: "sql", tableName: "my_outbox", columnNaming: "PascalCase" });
+
+			stdoutSpy.mockRestore();
+
+			const sql = written.join("");
+			expect(sql).toContain("CREATE TABLE IF NOT EXISTS MyOutbox");
+		});
+	});
+
 	describe("createMigration - file output", () => {
 		let writeFileSyncSpy: ReturnType<typeof spyOn>;
 

@@ -1,6 +1,7 @@
 import type { ArgumentsCamelCase, Argv } from "yargs";
 import { createMigrationAdapter } from "../../../services/migration-adapter";
 import type { MigrationTarget } from "../../../types/migration-adapter-config";
+import type { ColumnNaming } from "../../../utils/column-naming";
 
 interface CreateMigrationArgs {
 	target?: MigrationTarget;
@@ -11,6 +12,7 @@ interface CreateMigrationArgs {
 	config?: string;
 	migrationsPath?: string;
 	output?: string;
+	columnNaming: ColumnNaming;
 }
 
 export const command = "migration";
@@ -60,6 +62,12 @@ export function builder(yargs: Argv): Argv<CreateMigrationArgs> {
 			alias: "o",
 			type: "string",
 			description: "Output file path for SQL (SQL only, defaults to stdout)",
+		})
+		.option("column-naming", {
+			type: "string",
+			description: "Column naming convention",
+			choices: ["snake_case", "camelCase", "PascalCase"] as const,
+			default: "snake_case",
 		}) as unknown as Argv<CreateMigrationArgs>;
 }
 
@@ -77,6 +85,7 @@ export async function handler(argv: ArgumentsCamelCase<CreateMigrationArgs>): Pr
 				tableName: argv.tableName,
 				migrationName: argv.migrationName,
 				configPath: argv.config,
+				columnNaming: argv.columnNaming,
 			});
 		} else if (target === "sequelize") {
 			await adapter.createMigration({
@@ -85,12 +94,14 @@ export async function handler(argv: ArgumentsCamelCase<CreateMigrationArgs>): Pr
 				migrationName: argv.migrationName,
 				tableName: argv.tableName,
 				configPath: argv.config,
+				columnNaming: argv.columnNaming,
 			});
 		} else {
 			await adapter.createMigration({
 				target: "sql",
 				tableName: argv.tableName,
 				output: argv.output,
+				columnNaming: argv.columnNaming,
 			});
 		}
 	} catch (error) {

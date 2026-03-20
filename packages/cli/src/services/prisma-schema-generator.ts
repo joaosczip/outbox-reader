@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import * as path from "node:path";
+import { type ColumnNaming, applyNamingToTableName, getColumnNames } from "../utils/column-naming";
 import type { OutboxSchemaGenerationOptions, SchemaGenerationConfig } from "../types/schema-config";
 
 export class PrismaSchemaGenerator {
@@ -30,21 +31,28 @@ export class PrismaSchemaGenerator {
 			generateMigration: options.config?.generateMigration ?? configFromFile.generateMigration ?? true,
 			migrationName: options.config?.migrationName || configFromFile.migrationName || "add_outbox_table",
 			customFields: options.config?.customFields || configFromFile.customFields || {},
+			columnNaming: options.config?.columnNaming || configFromFile.columnNaming || "snake_case",
 		};
 	}
 
 	private getOutboxModelSchema(): string {
-		const { modelName, tableName, customFields } = this.config;
+		const { modelName, tableName, customFields, columnNaming } = this.config;
+		const naming: ColumnNaming = columnNaming ?? "snake_case";
+		const cols = getColumnNames(naming);
+		const dbTableName = applyNamingToTableName(tableName, naming);
+
+		const mapAnnotation = (tsName: string, dbName: string) =>
+			tsName !== dbName ? ` @map("${dbName}")` : "";
 
 		const standardFields = [
-			'id              String   @id @db.Uuid @default(dbgenerated("uuid_generate_v7()"))',
-			'aggregateId     String   @db.VarChar(50) @map("aggregate_id")',
-			'aggregateType   String   @db.VarChar(50) @map("aggregate_type")',
-			'eventType       String   @db.VarChar(50) @map("event_type")',
+			`id              String   @id @db.Uuid @default(dbgenerated("uuid_generate_v7()"))`,
+			`aggregateId     String   @db.VarChar(50)${mapAnnotation("aggregateId", cols.aggregateId)}`,
+			`aggregateType   String   @db.VarChar(50)${mapAnnotation("aggregateType", cols.aggregateType)}`,
+			`eventType       String   @db.VarChar(50)${mapAnnotation("eventType", cols.eventType)}`,
 			"payload         Json",
-			'sequenceNumber  BigInt?  @map("sequence_number")',
-			'createdAt       DateTime @default(now()) @map("created_at")',
-			'processedAt     DateTime? @map("processed_at")',
+			`sequenceNumber  BigInt?${mapAnnotation("sequenceNumber", cols.sequenceNumber)}`,
+			`createdAt       DateTime @default(now())${mapAnnotation("createdAt", cols.createdAt)}`,
+			`processedAt     DateTime?${mapAnnotation("processedAt", cols.processedAt)}`,
 			'status          String   @default("PENDING")',
 			"attempts        Int      @default(0)",
 		];
@@ -59,7 +67,7 @@ export class PrismaSchemaGenerator {
 		return `model ${modelName} {
   ${allFields.join("\n  ")}
 
-  @@map("${tableName}")
+  @@map("${dbTableName}")
   @@index([status])
   @@index([createdAt])
   @@index([sequenceNumber])

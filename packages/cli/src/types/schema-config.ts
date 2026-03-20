@@ -1,3 +1,5 @@
+import type { ColumnNaming } from "../utils/column-naming";
+
 export interface SchemaGenerationConfig {
 	/**
 	 * Path to the schema.prisma file.
@@ -34,6 +36,12 @@ export interface SchemaGenerationConfig {
 	 * These will be appended to the standard outbox fields.
 	 */
 	customFields?: Record<string, string>;
+
+	/**
+	 * Column naming convention for the outbox table.
+	 * Defaults to 'snake_case'.
+	 */
+	columnNaming?: ColumnNaming;
 }
 
 export interface OutboxSchemaGenerationOptions {

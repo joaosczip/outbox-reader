@@ -108,6 +108,66 @@ model User {
 		expect(modelMatches?.length).toBe(1); // Should only appear once
 	});
 
+	it("should generate camelCase fields without @map annotations", async () => {
+		const generator = new PrismaSchemaGenerator({
+			config: {
+				schemaPath: testSchemaPath,
+				modelName: "OutboxRecord",
+				tableName: "outbox",
+				generateMigration: false,
+				columnNaming: "camelCase",
+			},
+		});
+
+		await generator.generateSchema();
+
+		const content = fs.readFileSync(testSchemaPath, "utf-8");
+		expect(content).toContain("aggregateId     String   @db.VarChar(50)");
+		expect(content).not.toContain('@map("aggregate_id")');
+		expect(content).not.toContain('@map("aggregateId")');
+		expect(content).toContain('@@map("outbox")');
+	});
+
+	it("should generate PascalCase fields with @map annotations", async () => {
+		const generator = new PrismaSchemaGenerator({
+			config: {
+				schemaPath: testSchemaPath,
+				modelName: "OutboxRecord",
+				tableName: "outbox",
+				generateMigration: false,
+				columnNaming: "PascalCase",
+			},
+		});
+
+		await generator.generateSchema();
+
+		const content = fs.readFileSync(testSchemaPath, "utf-8");
+		expect(content).toContain('@map("AggregateId")');
+		expect(content).toContain('@map("AggregateType")');
+		expect(content).toContain('@map("EventType")');
+		expect(content).toContain('@map("SequenceNumber")');
+		expect(content).toContain('@map("CreatedAt")');
+		expect(content).toContain('@map("ProcessedAt")');
+		expect(content).toContain('@@map("Outbox")');
+	});
+
+	it("should apply PascalCase to multi-word table name", async () => {
+		const generator = new PrismaSchemaGenerator({
+			config: {
+				schemaPath: testSchemaPath,
+				modelName: "OutboxRecord",
+				tableName: "my_outbox",
+				generateMigration: false,
+				columnNaming: "PascalCase",
+			},
+		});
+
+		await generator.generateSchema();
+
+		const content = fs.readFileSync(testSchemaPath, "utf-8");
+		expect(content).toContain('@@map("MyOutbox")');
+	});
+
 	it("should include custom fields in the model", async () => {
 		const generator = new PrismaSchemaGenerator({
 			config: {

@@ -3,24 +3,33 @@ import type { Logger } from "./logger";
 import { type OutboxConstructor, OutboxRecord } from "./models/outbox-record";
 import type { OutboxRepository } from "./outbox-repository";
 import type { Publisher } from "./types";
+import { type ColumnNaming, applyNamingToTableName, getColumnNames } from "./utils/column-naming";
 
 export class OutboxProcessor {
 	private outboxRepository: OutboxRepository;
 	private logger: Logger;
 	private maxAttempts: number;
+	private columnNaming: ColumnNaming;
+	private tableName: string;
 
 	constructor({
 		outboxRepository,
 		logger,
 		maxAttempts,
+		columnNaming = "snake_case",
+		tableName = "outbox",
 	}: {
 		outboxRepository: OutboxRepository;
 		logger: Logger;
 		maxAttempts: number;
+		columnNaming?: ColumnNaming;
+		tableName?: string;
 	}) {
 		this.outboxRepository = outboxRepository;
 		this.logger = logger;
 		this.maxAttempts = maxAttempts;
+		this.columnNaming = columnNaming;
+		this.tableName = applyNamingToTableName(tableName, columnNaming);
 	}
 
 	async processInserts({
@@ -71,22 +80,25 @@ export class OutboxProcessor {
 	}
 
 	filterChanges(log: Wal2Json.Output) {
+		const tableName = this.tableName;
+		const cols = getColumnNames(this.columnNaming);
+
+		const columnNamesMapping: Record<string, string> = {
+			[cols.aggregateId]: "aggregateId",
+			[cols.aggregateType]: "aggregateType",
+			[cols.eventType]: "eventType",
+			[cols.createdAt]: "createdAt",
+			[cols.processedAt]: "processedAt",
+			[cols.sequenceNumber]: "sequenceNumber",
+		};
+
 		const onlyInsertsOnOutbox = ({ table, columnnames, kind }: Wal2Json.Change) =>
-			table === "outbox" && kind === "insert" && columnnames?.length;
+			table === tableName && kind === "insert" && columnnames?.length;
 
 		const insertToOutboxEntity = ({ columnnames, columnvalues }: Wal2Json.Change) => {
-			const columnNamesMapping: Record<string, string> = {
-				aggregate_id: "aggregateId",
-				aggregate_type: "aggregateType",
-				event_type: "eventType",
-				created_at: "createdAt",
-				processed_at: "processedAt",
-				sequence_number: "sequenceNumber",
-			};
-
 			const outboxAttributes = columnnames.reduce(
 				(acc: Partial<OutboxConstructor>, dbColumn: string, index) => {
-					const outboxColumn = columnNamesMapping[dbColumn as keyof OutboxConstructor] || dbColumn;
+					const outboxColumn = columnNamesMapping[dbColumn] || dbColumn;
 					(acc as Record<string, unknown>)[outboxColumn] = columnvalues[index];
 					return acc;
 				},
