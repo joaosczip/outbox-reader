@@ -42,12 +42,28 @@ cd packages/cli && bun src/cli/generate-schema.ts [options]
 docker compose up -d
 ```
 
+## Project Structure
+
+This is a **Bun workspace monorepo**. Always make changes in the specific package directory, never the root, unless explicitly asked.
+
+```
+outbox-reader/
+├── packages/
+│   ├── core/        (@outbox-reader/core)       — runtime service: WAL replication, NATS publishing, DB repository, cronjobs
+│   ├── cli/         (@joaosczip/outy-cli)        — developer tooling: Prisma schema generator, outbox table CLI
+│   └── client/      (@joaosczip/outy-client)     — ORM-agnostic client for writing outbox events transactionally
+└── CLAUDE.md
+```
+
+Each package has its own `CLAUDE.md` with package-specific guidance.
+
 ## Monorepo Structure
 
-This is a **Bun workspace monorepo** with two packages:
+This is a **Bun workspace monorepo** with three packages:
 
 - **`packages/core`** (`@outbox-reader/core`): The runtime service — WAL replication, event processing, NATS publishing, DB repository, cronjobs.
 - **`packages/cli`** (`@joaosczip/outy-cli`): Developer tooling — Prisma schema generator and CLI for creating the outbox table. Does **not** depend on core.
+- **`packages/client`** (`@joaosczip/outy-client`): ORM-agnostic client library for writing outbox events transactionally. Supports Prisma and Sequelize adapters. Does **not** depend on core.
 
 ## Architecture
 
@@ -146,6 +162,10 @@ beforeEach(() => {
 - Prioritize coverage for critical flows: WAL event processing, status transitions (`PENDING` → `PROCESSED`/`FAILED`), retry logic, and cronjob operations.
 - Prefer assertions that protect against regressions: inputs, outputs, side effects, persistence changes, and error paths.
 - A smaller suite with strong behavioral assertions is better than a larger suite that only executes lines without validating outcomes.
+
+## Implementation Principles
+
+- Before designing a custom solution, check if the library/framework already has a built-in option. Prefer simple configuration over custom code.
 
 ## Bugfix Workflow (Mandatory)
 
