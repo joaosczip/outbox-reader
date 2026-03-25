@@ -1,4 +1,5 @@
 import type { OutboxRecord } from "./models/outbox-record";
+import { recordsFailed, retryAttempts, retryQueueSize } from "./metrics";
 import type { Publisher, RetryConfig } from "./types";
 
 type ProcessorLike = {
@@ -43,6 +44,7 @@ export class RetryQueue {
 	) {}
 
 	enqueue(record: OutboxRecord): void {
+		retryQueueSize.add(1);
 		this.schedule({ record, attempt: 0 });
 	}
 
@@ -63,12 +65,14 @@ export class RetryQueue {
 
 	private async run(entry: QueueEntry): Promise<void> {
 		const { record, attempt } = entry;
+		retryAttempts.add(1, { "event.type": record.eventType });
 		try {
 			await this.deps.processor.processInserts({
 				insertedRecord: record,
 				publisher: this.deps.publisher,
 				prefetchedOutbox: undefined, // force fresh DB read on every retry
 			});
+			retryQueueSize.add(-1);
 			this.deps.logger.info({
 				message: `Outbox record ${record.id} succeeded on retry attempt ${attempt + 1}`,
 				extra: { recordId: record.id, attempt: attempt + 1 },
@@ -76,6 +80,8 @@ export class RetryQueue {
 		} catch (error) {
 			const nextAttempt = attempt + 1;
 			if (nextAttempt >= this.deps.config.numOfAttempts) {
+				retryQueueSize.add(-1);
+				recordsFailed.add(1, { "event.type": record.eventType });
 				this.deps.logger.error({
 					message: `Outbox record ${record.id} exhausted all ${this.deps.config.numOfAttempts} retry attempts`,
 					extra: { recordId: record.id },

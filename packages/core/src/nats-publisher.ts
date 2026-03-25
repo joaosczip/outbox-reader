@@ -2,6 +2,7 @@ import { jetstream } from "@nats-io/jetstream";
 import { type NatsConnection, connect } from "nats";
 
 import type { Logger } from "./logger";
+import { publishDuration } from "./metrics";
 import type { OutboxRecord } from "./models/outbox-record";
 import type { NATSConnectionConfig, Publisher, RetryConfig } from "./types";
 
@@ -50,6 +51,7 @@ export class NATSPublisher implements Publisher {
 
 		const jc = jetstream(this.connection as unknown as Parameters<typeof jetstream>[0]);
 
+		const start = Date.now();
 		try {
 			this.logger.info({
 				message: "Publishing message to NATS stream",
@@ -61,6 +63,7 @@ export class NATSPublisher implements Publisher {
 			});
 			const payload = typeof record.payload === "string" ? record.payload : JSON.stringify(record.payload);
 			const { seq } = await jc.publish(record.eventType, payload, { msgID: record.aggregateId });
+			publishDuration.record(Date.now() - start, { "event.type": record.eventType, outcome: "success" });
 
 			this.logger.info({
 				message: "Published message to NATS stream",
@@ -74,6 +77,7 @@ export class NATSPublisher implements Publisher {
 
 			return seq;
 		} catch (error) {
+			publishDuration.record(Date.now() - start, { "event.type": record.eventType, outcome: "error" });
 			this.logger.error({
 				message: "Error publishing message to NATS stream",
 				extra: {

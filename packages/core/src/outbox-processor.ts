@@ -1,5 +1,6 @@
 import type { Wal2Json } from "pg-logical-replication";
 import type { Logger } from "./logger";
+import { recordsProcessed, recordsSkipped } from "./metrics";
 import { type OutboxConstructor, OutboxRecord } from "./models/outbox-record";
 import type { OutboxRepository } from "./outbox-repository";
 import type { Publisher } from "./types";
@@ -51,6 +52,7 @@ export class OutboxProcessor {
 				message: `Outbox record ${record.id} already processed`,
 				extra: { recordId: record.id },
 			});
+			recordsSkipped.add(1, { reason: "already_processed" });
 			return;
 		}
 
@@ -59,6 +61,7 @@ export class OutboxProcessor {
 				message: `Outbox record ${record.id} reached max attempts`,
 				extra: { recordId: record.id, attempts: outbox.attempts },
 			});
+			recordsSkipped.add(1, { reason: "max_attempts_exceeded" });
 			return;
 		}
 
@@ -77,6 +80,7 @@ export class OutboxProcessor {
 				return true;
 			},
 		});
+		recordsProcessed.add(1, { "event.type": outbox.eventType });
 	}
 
 	filterChanges(log: Wal2Json.Output) {

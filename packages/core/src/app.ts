@@ -1,9 +1,12 @@
+import "./telemetry";
 import "dotenv/config";
 import pAll from "p-all";
 import { Pool } from "pg";
 import type { LogicalReplicationService, Wal2Json } from "pg-logical-replication";
 
 import { config, dbWriteRetryConfig, maxOutboxAttempts, retryQueueConfig } from "./config";
+import { processingDuration, recordsFiltered, walEventsReceived } from "./metrics";
+import { shutdownTelemetry } from "./telemetry";
 import { startHealthServer } from "./health";
 import { Logger } from "./logger";
 import { OutboxProcessor } from "./outbox-processor";
@@ -98,6 +101,14 @@ async function shutdown(signal: string): Promise<void> {
 		errors.push(err);
 	}
 
+	// 5. Flush and shutdown OTeL (must be last to capture all preceding telemetry)
+	try {
+		await shutdownTelemetry();
+	} catch (err) {
+		logger.error({ message: "Error shutting down telemetry", error: err });
+		errors.push(err);
+	}
+
 	logger.info({ message: "Graceful shutdown complete" });
 	process.exit(errors.length > 0 ? 1 : 0);
 }
@@ -123,7 +134,10 @@ process.once("SIGINT", () => shutdown("SIGINT"));
 		connectionString,
 		slotName,
 		onChange: async (log: Wal2Json.Output) => {
+			walEventsReceived.add(1);
+
 			const outboxRecords = outboxProcessor.filterChanges(log);
+			recordsFiltered.add(outboxRecords.length);
 
 			const ids = outboxRecords.map((r) => r.id as string);
 			const fetchedRecords = await outboxRepository.findUnprocessedByIds(ids);
@@ -132,13 +146,16 @@ process.once("SIGINT", () => shutdown("SIGINT"));
 			const activePublisher = publisher as Publisher;
 			await pAll(
 				outboxRecords.map((record) => async () => {
+					const start = Date.now();
 					try {
 						await outboxProcessor.processInserts({
 							insertedRecord: record,
 							prefetchedOutbox: fetchedMap.get(record.id as string) ?? null,
 							publisher: activePublisher,
 						});
+						processingDuration.record(Date.now() - start, { "event.type": record.eventType });
 					} catch (error) {
+						processingDuration.record(Date.now() - start, { "event.type": record.eventType });
 						logger.error({
 							message: `Outbox record ${record.id} failed on first attempt, enqueueing for retry`,
 							extra: { recordId: record.id },
