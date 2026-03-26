@@ -3,23 +3,23 @@ services:
         build:
             context: .
             dockerfile: Dockerfile.pg
-        container_name: ecomm-be-pg
+        container_name: outbox-reader-pg
         restart: always
         environment:
             PGDATA: /var/lib/postgresql/data/pgdata
             POSTGRES_USER: root
             POSTGRES_PASSWORD: root
-            POSTGRES_DB: ecomm-be
+            POSTGRES_DB: outbox
         volumes:
             - pgdata:/var/lib/postgresql/data
             - ./pg.conf:/etc/postgresql/postgresql.conf
         ports:
-            - "5433:5432"
+            - "5432:5432"
         command: ["-c", "config_file=/etc/postgresql/postgresql.conf"]
 
     nats:
         image: nats:2.10.25-alpine3.21
-        container_name: ecomm-be-nats
+        container_name: outbox-reader-nats
         restart: always
         ports:
             - "4222:4222"
@@ -39,9 +39,9 @@ services:
             - db
             - nats
         environment:
-            DATABASE_URL: postgres://root:root@ecomm-be-pg:5432/ecomm-be?replication=database
+            DATABASE_URL: postgres://root:root@db:5432/outbox
             REPLICATION_SLOT_NAME: outbox_slot
-            TARGET_NATS_URL: nats://ecomm-be-nats:4222
+            TARGET_NATS_URL: nats://nats:4222
             PORT: "4599"
             LOG_LEVEL: info
             PROMETHEUS_PORT: "9464"

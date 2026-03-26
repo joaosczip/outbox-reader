@@ -12,7 +12,7 @@ retryConfig:
 
 options:
   # NATS connection options
-  servers: nats://localhost:4222
+  servers: nats://nats:4222
   # For clustering, use a list:
   # servers:
   #   - nats://server1:4222
