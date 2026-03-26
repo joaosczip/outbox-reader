@@ -12,12 +12,13 @@ const endpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? "http://localhost:43
 const serviceName = process.env.OTEL_SERVICE_NAME ?? "outbox-reader";
 const exportIntervalMs = Number(process.env.OTEL_METRICS_EXPORT_INTERVAL_MS ?? "30000");
 const prometheusEnabled = (process.env.PROMETHEUS_EXPORTER_ENABLED ?? "true") === "true";
+const prometheusPort = Number(process.env.PROMETHEUS_PORT ?? "9464");
 
 const resource = defaultResource().merge(resourceFromAttributes({ [ATTR_SERVICE_NAME]: serviceName }));
 
 // --- Metrics ---
 const metricReader: MetricReader = prometheusEnabled
-	? new PrometheusExporter()
+	? new PrometheusExporter({ port: prometheusPort })
 	: new PeriodicExportingMetricReader({
 			exporter: new OTLPMetricExporter({ url: `${endpoint}/v1/metrics` }),
 			exportIntervalMillis: exportIntervalMs,

@@ -44,14 +44,27 @@ services:
             TARGET_NATS_URL: nats://ecomm-be-nats:4222
             PORT: "4599"
             LOG_LEVEL: info
+            PROMETHEUS_PORT: "9464"
         ports:
             - "4599:4599"
+            - "9464:9464"
         healthcheck:
             test: ["CMD", "wget", "-qO-", "http://localhost:4599/health"]
             interval: 10s
             timeout: 5s
             retries: 5
             start_period: 15s
+
+    prometheus:
+        image: prom/prometheus:v3.2.1
+        container_name: outbox-reader-prometheus
+        restart: always
+        depends_on:
+            - outbox-reader
+        volumes:
+            - ./prometheus.yml:/etc/prometheus/prometheus.yml
+        ports:
+            - "9090:9090"
 
 volumes:
     pgdata:
