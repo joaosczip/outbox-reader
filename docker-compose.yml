@@ -18,7 +18,7 @@ services:
         command: ["-c", "config_file=/etc/postgresql/postgresql.conf"]
 
     nats:
-        image: nats:2.10.25-alpine3.21
+        image: nats:2.12.6-alpine
         container_name: outbox-reader-nats
         restart: always
         ports:
@@ -28,6 +28,40 @@ services:
             - ./nats.conf:/etc/nats/nats.conf
             - jetstream:/data/jetstream
         command: ["-c", "/etc/nats/nats.conf"]
+        healthcheck:
+            test: ["CMD", "wget", "-qO-", "http://localhost:8222/varz"]
+            interval: 5s
+            timeout: 3s
+            retries: 5
+
+    nats-init:
+        image: natsio/nats-box:latest
+        container_name: outbox-reader-nats-init
+        depends_on:
+            nats:
+                condition: service_healthy
+        restart: "no"
+        command: ["nats", "stream", "add", "TEST",
+            "--server=nats://nats:4222",
+            "--subjects=test.>",
+            "--storage=file",
+            "--retention=limits",
+            "--replicas=1",
+            "--discard=old",
+            "--max-msgs=-1",
+            "--max-bytes=-1",
+            "--max-age=0",
+            "--dupe-window=2m",
+            "--defaults"]
+
+    nats-box:
+        image: natsio/nats-box:latest
+        container_name: outbox-reader-nats-cli
+        depends_on:
+            - nats                                                                                      
+        entrypoint: ["sleep", "infinity"] 
+        environment:                                                                                    
+            NATS_URL: nats://nats:4222
 
     outbox-reader:
         build:
