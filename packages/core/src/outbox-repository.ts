@@ -95,15 +95,16 @@ export class OutboxRepository {
 		});
 	}
 
-	async findFailedEvents(): Promise<OutboxRow[]> {
+	async findFailedEvents(limit = 100): Promise<OutboxRow[]> {
 		const c = this.cols;
 		const query = `
 			SELECT ${c.id}, ${c.aggregateId}, ${c.aggregateType}, ${c.eventType}, ${c.payload}, ${c.sequenceNumber},
 			       ${c.createdAt}, ${c.processedAt}, ${c.status}, ${c.attempts}
 			FROM ${this.tableName}
 			WHERE ${c.status} = 'FAILED'
+			LIMIT $1
 		`;
-		const result = await this.pool.query(query);
+		const result = await this.pool.query(query, [limit]);
 		return result.rows;
 	}
 

@@ -51,7 +51,7 @@ export class MockOutboxRepository {
 		throw new Error("Not implemented in mock");
 	}
 
-	async findFailedEvents(): Promise<OutboxRow[]> {
+	async findFailedEvents(_limit = 100): Promise<OutboxRow[]> {
 		throw new Error("Not implemented in mock");
 	}
 

@@ -1,5 +1,4 @@
 import "./telemetry";
-import "dotenv/config";
 import pAll from "p-all";
 import { Pool } from "pg";
 import type { LogicalReplicationService, Wal2Json } from "pg-logical-replication";

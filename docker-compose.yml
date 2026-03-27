@@ -77,7 +77,7 @@ services:
             REPLICATION_SLOT_NAME: outbox_slot
             TARGET_NATS_URL: nats://nats:4222
             PORT: "4599"
-            LOG_LEVEL: info
+            LOG_LEVEL: debug
             PROMETHEUS_PORT: "9464"
         ports:
             - "4599:4599"

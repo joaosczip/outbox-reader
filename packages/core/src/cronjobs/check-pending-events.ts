@@ -1,4 +1,3 @@
-import "dotenv/config";
 import { type NatsError, connect } from "nats";
 import { pool } from "../db";
 import { Logger } from "../logger";
