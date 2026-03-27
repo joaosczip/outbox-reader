@@ -9,7 +9,11 @@ export class MockLogger {
 		this.logs.push({ level: "warn", message, extra });
 	}
 
-	error({ message, extra, error }: { message: string; extra?: unknown; error?: unknown }): void {
+	error({ message, extra, error }: { message: string; extra?: unknown; error: unknown }): void {
 		this.logs.push({ level: "error", message, extra, error });
+	}
+
+	debug({ message, extra }: { message: string; extra?: unknown }): void {
+		this.logs.push({ level: "debug", message, extra });
 	}
 }

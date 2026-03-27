@@ -1,4 +1,5 @@
 import { type OutboxRecord, OutboxStatus } from "../../src/models/outbox-record";
+import type { OutboxRow } from "../../src/outbox-repository";
 
 export class MockOutboxRepository {
 	private records: Map<string, OutboxRecord> = new Map();
@@ -44,6 +45,43 @@ export class MockOutboxRepository {
 			record.status = OutboxStatus.FAILED;
 			record.attempts = attempts + 1;
 		}
+	}
+
+	async markManyAsFailed(_params: { ids: string[] }): Promise<void> {
+		throw new Error("Not implemented in mock");
+	}
+
+	async findFailedEvents(): Promise<OutboxRow[]> {
+		throw new Error("Not implemented in mock");
+	}
+
+	async findRecentPendingEvents(_minutes?: number): Promise<OutboxRow[]> {
+		throw new Error("Not implemented in mock");
+	}
+
+	async findLastProcessedEvent(): Promise<OutboxRecord | null> {
+		throw new Error("Not implemented in mock");
+	}
+
+	async create(_params: {
+		id?: string;
+		aggregateId: string;
+		aggregateType: string;
+		eventType: string;
+		payload: unknown;
+		sequenceNumber: number;
+		status: string;
+		attempts?: number;
+	}): Promise<string> {
+		throw new Error("Not implemented in mock");
+	}
+
+	async delete(_id: string, _status: string): Promise<void> {
+		throw new Error("Not implemented in mock");
+	}
+
+	async onTransaction(_callback: (tx: MockOutboxRepository) => Promise<void>): Promise<void> {
+		throw new Error("Not implemented in mock");
 	}
 
 	// Test helper methods

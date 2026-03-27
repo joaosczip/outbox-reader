@@ -1,3 +1,4 @@
+import type { Wal2Json } from "pg-logical-replication";
 import type { OutboxRecord } from "../../src/models/outbox-record";
 import type { Publisher } from "../../src/types";
 
@@ -34,6 +35,10 @@ export class MockOutboxProcessor {
 			return;
 		}
 		if (this.error) throw this.error;
+	}
+
+	filterChanges(_log: Wal2Json.Output): OutboxRecord[] {
+		throw new Error("Not implemented in mock");
 	}
 
 	reset(): void {

@@ -16,10 +16,10 @@ export class RetryQueue {
 
 	constructor(
 		private readonly deps: {
-			processor: ProcessorLike;
+			processor: OutboxProcessor;
 			publisher: Publisher;
-			outboxRepository: RepositoryLike;
-			logger: LoggerLike;
+			outboxRepository: OutboxRepository;
+			logger: Logger;
 			config: RetryConfig;
 		},
 	) {}
