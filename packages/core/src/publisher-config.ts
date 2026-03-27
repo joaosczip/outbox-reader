@@ -7,6 +7,7 @@ export type NATSPublisherConfig = {
 	// Reuses NATSConnectionConfig shape — passed directly to NATSPublisher constructor
 	options: {
 		servers: string | string[];
+		subjectPrefix: string;
 		name?: string;
 		user?: string;
 		pass?: string;

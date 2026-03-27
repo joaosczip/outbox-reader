@@ -24,7 +24,7 @@ describe("createPublisher", () => {
 			const cfg: NATSPublisherConfig = {
 				provider: "nats",
 				retryConfig,
-				options: { servers: "nats://localhost:4222" },
+				options: { servers: "nats://localhost:4222", subjectPrefix: "events" },
 			};
 			expect(createPublisher(cfg, logger)).toBeInstanceOf(NATSPublisher);
 		});
@@ -33,7 +33,7 @@ describe("createPublisher", () => {
 			const cfg: NATSPublisherConfig = {
 				provider: "nats",
 				retryConfig,
-				options: { servers: "nats://localhost:4222" },
+				options: { servers: "nats://localhost:4222", subjectPrefix: "events" },
 			};
 			expect(createPublisher(cfg, logger).retryConfig).toEqual(retryConfig);
 		});

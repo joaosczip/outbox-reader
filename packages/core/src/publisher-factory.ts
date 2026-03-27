@@ -5,12 +5,15 @@ import type { Publisher } from "./types";
 
 export function createPublisher(config: PublisherConfig, logger: Logger): Publisher {
 	switch (config.provider) {
-		case "nats":
+		case "nats": {
+			const { subjectPrefix, ...connectionConfig } = config.options;
 			return new NATSPublisher({
 				logger,
 				retryConfig: config.retryConfig,
-				connectionConfig: config.options,
+				connectionConfig,
+				subjectPrefix,
 			});
+		}
 		case "sqs":
 			throw new Error("Publisher provider 'sqs' is not yet implemented");
 		case "kafka":

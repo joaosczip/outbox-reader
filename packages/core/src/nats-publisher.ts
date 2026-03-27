@@ -11,19 +11,23 @@ export class NATSPublisher implements Publisher {
 	readonly retryConfig: RetryConfig;
 	private logger: Logger;
 	private connectionConfig: NATSConnectionConfig;
+	private subjectPrefix: string;
 
 	constructor({
 		retryConfig,
 		logger,
 		connectionConfig,
+		subjectPrefix,
 	}: {
 		retryConfig: RetryConfig;
 		logger: Logger;
 		connectionConfig: NATSConnectionConfig;
+		subjectPrefix: string;
 	}) {
 		this.retryConfig = retryConfig;
 		this.logger = logger;
 		this.connectionConfig = connectionConfig;
+		this.subjectPrefix = subjectPrefix;
 	}
 
 	async connect(): Promise<void> {
@@ -51,24 +55,25 @@ export class NATSPublisher implements Publisher {
 
 		const jc = jetstream(this.connection as unknown as Parameters<typeof jetstream>[0]);
 
+		const subject = `${this.subjectPrefix}.${record.eventType}`;
 		const start = Date.now();
 		try {
 			this.logger.info({
 				message: "Publishing message to NATS stream",
 				extra: {
-					eventType: record.eventType,
+					subject,
 					aggregateId: record.aggregateId,
 					aggregateType: record.aggregateType,
 				},
 			});
 			const payload = typeof record.payload === "string" ? record.payload : JSON.stringify(record.payload);
-			const { seq } = await jc.publish(record.eventType, payload, { msgID: record.aggregateId });
+			const { seq } = await jc.publish(subject, payload, { msgID: record.aggregateId });
 			publishDuration.record(Date.now() - start, { "event.type": record.eventType, outcome: "success" });
 
 			this.logger.info({
 				message: "Published message to NATS stream",
 				extra: {
-					eventType: record.eventType,
+					subject,
 					aggregateId: record.aggregateId,
 					aggregateType: record.aggregateType,
 					sequenceNumber: seq,
@@ -81,7 +86,7 @@ export class NATSPublisher implements Publisher {
 			this.logger.error({
 				message: "Error publishing message to NATS stream",
 				extra: {
-					eventType: record.eventType,
+					subject,
 					aggregateId: record.aggregateId,
 					aggregateType: record.aggregateType,
 				},

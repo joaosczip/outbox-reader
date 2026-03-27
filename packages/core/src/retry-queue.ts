@@ -1,28 +1,9 @@
+import type { Logger } from "./logger";
 import type { OutboxRecord } from "./models/outbox-record";
 import { recordsFailed, retryAttempts, retryQueueSize } from "./metrics";
+import type { OutboxProcessor } from "./outbox-processor";
+import type { OutboxRepository } from "./outbox-repository";
 import type { Publisher, RetryConfig } from "./types";
-
-type ProcessorLike = {
-	processInserts: (params: {
-		insertedRecord: OutboxRecord;
-		publisher: Publisher;
-		prefetchedOutbox?: OutboxRecord | null;
-	}) => Promise<void>;
-};
-
-type RepositoryLike = {
-	markAsFailed: (params: {
-		id: string;
-		attempts: number;
-		retry: (e: Error, attempts: number) => boolean;
-	}) => Promise<void>;
-};
-
-type LoggerLike = {
-	info: (data: { message: string; extra?: Record<string, unknown> }) => void;
-	warn: (data: { message: string; extra?: Record<string, unknown> }) => void;
-	error: (data: { message: string; extra?: Record<string, unknown>; error?: unknown }) => void;
-};
 
 type QueueEntry = {
 	record: OutboxRecord;
