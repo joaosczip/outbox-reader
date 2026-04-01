@@ -6,7 +6,7 @@ The next features and enhancements to be made in this project.
 
 1. Dead Letter Queue (DLQ)
 
-- Implement a separate storage for events that fail after maximum retries
+- ~~Implement a separate storage for events that fail after maximum retries~~ _(done — `FAILED` status + `findFailedEvents()` + reprocess cronjob)_
 - Add a UI to inspect and manually reprocess events from the DLQ
 
 2. Multi-stream Support
@@ -21,7 +21,7 @@ The next features and enhancements to be made in this project.
 
 4. Configuration Management
 
-- Support multiple environment configurations
+- ~~Support multiple environment configurations~~ _(done — env-based config in `config.ts` and YAML publisher config)_
 - Add dynamic configuration reloading without service restart
 
 ## Architectural Improvements
@@ -39,7 +39,7 @@ The next features and enhancements to be made in this project.
 3. Cloud-Native Features
 
 - Add Kubernetes deployment manifests
-- Implement readiness/liveness probes for container orchestration
+- ~~Implement readiness/liveness probes for container orchestration~~ _(done — `/health` endpoint + graceful shutdown in `app.ts`)_
 
 ## Operational Improvements
 
@@ -48,8 +48,4 @@ The next features and enhancements to be made in this project.
 - Build tooling to simulate high-load scenarios
 - Create benchmarking utilities for optimizing performance
 
-2. Enhanced Monitoring & Observability
-
-- Add OpenTelemetry integration for distributed tracing
-- Expand Prometheus metrics with more detailed event processing stats
-- Add structured logging with correlation IDs across event processing lifecycle
+2. ~~Enhanced Monitoring & Observability~~ _(done — OpenTelemetry + Prometheus metrics + structured logging with correlation IDs in `telemetry.ts`, `metrics.ts`, `logger.ts`)_
