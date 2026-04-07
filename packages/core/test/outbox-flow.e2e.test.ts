@@ -11,12 +11,7 @@ import { NATSPublisher } from "../src/nats-publisher";
 import { OutboxProcessor } from "../src/outbox-processor";
 import { OutboxRepository } from "../src/outbox-repository";
 import type { RetryConfig } from "../src/types";
-
-const DB_CONNECTION_STRING = process.env.DATABASE_URL || "postgres://root:root@localhost:5433/ecomm-be";
-const NATS_URL = process.env.TARGET_NATS_URL || "nats://localhost:4222";
-const REPLICATION_SLOT = process.env.REPLICATION_SLOT_NAME || "outbox_slot_e2e_test";
-const STREAM_NAME = process.env.JETSTREAM_STREAM_NAME || "OUTBOX_E2E_TEST";
-const TEST_SUBJECT_PREFIX = "e2e.test.";
+import { testConfig } from "./setup";
 
 const dbRetryConfig: RetryConfig = {
 	jitter: "full",
@@ -57,7 +52,7 @@ describe("Outbox Flow E2E", () => {
 	const insertedIds: string[] = [];
 
 	beforeAll(async () => {
-		pool = new Pool({ connectionString: DB_CONNECTION_STRING, max: 5 });
+		pool = new Pool({ connectionString: testConfig.connectionString, max: 5 });
 
 		await pool.query(`
 			CREATE TABLE IF NOT EXISTS outbox (
@@ -75,17 +70,17 @@ describe("Outbox Flow E2E", () => {
 		`);
 
 		// Clean up any stale replication slot from a previous failed run
-		await pool.query("SELECT pg_drop_replication_slot($1)", [REPLICATION_SLOT]).catch(() => {});
+		await pool.query("SELECT pg_drop_replication_slot($1)", [testConfig.replicationSlot]).catch(() => {});
 
 		// Set up NATS connection and JetStream
-		natsConn = await connect({ servers: NATS_URL });
+		natsConn = await connect({ servers: testConfig.natsUrl });
 		jsm = await jetstreamManager(natsConn as unknown as Parameters<typeof jetstreamManager>[0]);
 
 		// Delete stream if it exists from a previous run, then recreate
-		await jsm.streams.delete(STREAM_NAME).catch(() => {});
+		await jsm.streams.delete(testConfig.streamName).catch(() => {});
 		await jsm.streams.add({
-			name: STREAM_NAME,
-			subjects: [`${TEST_SUBJECT_PREFIX}>`],
+			name: testConfig.streamName,
+			subjects: [`${testConfig.testSubjectPrefix}>`],
 		});
 
 		// Wire up application components
@@ -93,20 +88,20 @@ describe("Outbox Flow E2E", () => {
 		natsPublisher = new NATSPublisher({
 			logger,
 			retryConfig: natsRetryConfig,
-			connectionConfig: { servers: NATS_URL, name: "e2e-test-publisher" },
+			connectionConfig: { servers: testConfig.natsUrl, name: "e2e-test-publisher" },
 		});
 		outboxProcessor = new OutboxProcessor({ outboxRepository, logger, maxAttempts: natsRetryConfig.numOfAttempts });
 
 		await natsPublisher.connect();
 
 		// Create the replication slot before subscribing
-		const replPool = new Pool({ connectionString: `${DB_CONNECTION_STRING}?replication=database`, max: 1 });
-		await replPool.query(`CREATE_REPLICATION_SLOT "${REPLICATION_SLOT}" LOGICAL wal2json`);
+		const replPool = new Pool({ connectionString: `${testConfig.connectionString}?replication=database`, max: 1 });
+		await replPool.query(`CREATE_REPLICATION_SLOT "${testConfig.replicationSlot}" LOGICAL wal2json`);
 		await replPool.end();
 
 		// Start WAL replication (mirrors app.ts wiring)
 		replicationService = new LogicalReplicationService(
-			{ connectionString: `${DB_CONNECTION_STRING}?replication=database` },
+			{ connectionString: `${testConfig.connectionString}?replication=database` },
 			{ flowControl: { enabled: true }, acknowledge: { auto: true, timeoutSeconds: 0 } },
 		);
 
@@ -131,7 +126,7 @@ describe("Outbox Flow E2E", () => {
 		});
 
 		const plugin = new Wal2JsonPlugin();
-		replicationService.subscribe(plugin, REPLICATION_SLOT);
+		replicationService.subscribe(plugin, testConfig.replicationSlot);
 
 		// Give replication a moment to establish
 		await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -148,11 +143,11 @@ describe("Outbox Flow E2E", () => {
 		await natsPublisher?.close().catch(() => {});
 
 		// Clean up JetStream stream
-		await jsm?.streams.delete(STREAM_NAME).catch(() => {});
+		await jsm?.streams.delete(testConfig.streamName).catch(() => {});
 		await natsConn?.close().catch(() => {});
 
 		// Drop the test replication slot
-		await pool.query("SELECT pg_drop_replication_slot($1)", [REPLICATION_SLOT]).catch(() => {});
+		await pool.query("SELECT pg_drop_replication_slot($1)", [testConfig.replicationSlot]).catch(() => {});
 
 		await pool?.end().catch(() => {});
 	}, 15_000);
@@ -161,7 +156,7 @@ describe("Outbox Flow E2E", () => {
 		const aggregateId = crypto.randomUUID();
 		const recordId = crypto.randomUUID();
 		const payload = JSON.stringify({ orderId: "123", amount: 99.99 });
-		const eventType = `${TEST_SUBJECT_PREFIX}order_created`;
+		const eventType = `${testConfig.testSubjectPrefix}order_created`;
 
 		insertedIds.push(recordId);
 
@@ -183,7 +178,7 @@ describe("Outbox Flow E2E", () => {
 
 		// Verify the message was published to NATS JetStream
 		const js = jetstream(natsConn as unknown as Parameters<typeof jetstream>[0]);
-		const consumer = await js.consumers.get(STREAM_NAME);
+		const consumer = await js.consumers.get(testConfig.streamName);
 		const messages = await consumer.fetch({ max_messages: 1, expires: 5_000 });
 
 		let receivedMessage: { subject: string; data: string } | null = null;
@@ -206,19 +201,19 @@ describe("Outbox Flow E2E", () => {
 			{
 				id: crypto.randomUUID(),
 				aggregateId: crypto.randomUUID(),
-				eventType: `${TEST_SUBJECT_PREFIX}user_created`,
+				eventType: `${testConfig.testSubjectPrefix}user_created`,
 				payload: JSON.stringify({ userId: "u1" }),
 			},
 			{
 				id: crypto.randomUUID(),
 				aggregateId: crypto.randomUUID(),
-				eventType: `${TEST_SUBJECT_PREFIX}payment_received`,
+				eventType: `${testConfig.testSubjectPrefix}payment_received`,
 				payload: JSON.stringify({ paymentId: "p1", amount: 50 }),
 			},
 			{
 				id: crypto.randomUUID(),
 				aggregateId: crypto.randomUUID(),
-				eventType: `${TEST_SUBJECT_PREFIX}item_shipped`,
+				eventType: `${testConfig.testSubjectPrefix}item_shipped`,
 				payload: JSON.stringify({ shipmentId: "s1" }),
 			},
 		];
@@ -255,7 +250,7 @@ describe("Outbox Flow E2E", () => {
 
 		// Verify messages arrived in NATS
 		const js = jetstream(natsConn as unknown as Parameters<typeof jetstream>[0]);
-		const consumer = await js.consumers.get(STREAM_NAME);
+		const consumer = await js.consumers.get(testConfig.streamName);
 		const messages = await consumer.fetch({ max_messages: 10, expires: 5_000 });
 
 		const receivedSubjects: string[] = [];
