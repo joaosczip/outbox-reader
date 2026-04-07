@@ -41,18 +41,28 @@ services:
             nats:
                 condition: service_healthy
         restart: "no"
-        command: ["nats", "stream", "add", "TEST",
-            "--server=nats://nats:4222",
-            "--subjects=test.>",
-            "--storage=file",
-            "--retention=limits",
-            "--replicas=1",
-            "--discard=old",
-            "--max-msgs=-1",
-            "--max-bytes=-1",
-            "--max-age=0",
-            "--dupe-window=2m",
-            "--defaults"]
+        entrypoint: ["sh", "-c"]
+        command:
+            - |
+                nats stream add TEST \
+                  --server=nats://nats:4222 \
+                  --subjects='test.>' \
+                  --storage=file \
+                  --retention=limits \
+                  --replicas=1 \
+                  --discard=old \
+                  --max-msgs=-1 \
+                  --max-bytes=-1 \
+                  --max-age=0 \
+                  --dupe-window=2m \
+                  --defaults &&
+                nats consumer add TEST test-consumer \
+                  --server=nats://nats:4222 \
+                  --pull \
+                  --deliver=all \
+                  --ack=explicit \
+                  --replay=instant \
+                  --defaults
 
     nats-box:
         image: natsio/nats-box:latest
