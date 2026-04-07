@@ -1,12 +1,12 @@
+import { metrics } from "@opentelemetry/api";
+import { logs } from "@opentelemetry/api-logs";
 import { OTLPLogExporter } from "@opentelemetry/exporter-logs-otlp-http";
 import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-http";
 import { PrometheusExporter } from "@opentelemetry/exporter-prometheus";
 import { defaultResource, resourceFromAttributes } from "@opentelemetry/resources";
 import { BatchLogRecordProcessor, LoggerProvider } from "@opentelemetry/sdk-logs";
-import { MeterProvider, PeriodicExportingMetricReader, type MetricReader } from "@opentelemetry/sdk-metrics";
+import { MeterProvider, type MetricReader, PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics";
 import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
-import { metrics } from "@opentelemetry/api";
-import { logs } from "@opentelemetry/api-logs";
 
 const endpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? "http://localhost:4318";
 const serviceName = process.env.OTEL_SERVICE_NAME ?? "outbox-reader";

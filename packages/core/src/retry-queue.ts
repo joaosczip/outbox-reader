@@ -1,6 +1,6 @@
 import type { Logger } from "./logger";
-import type { OutboxRecord } from "./models/outbox-record";
 import { recordsFailed, retryAttempts, retryQueueSize } from "./metrics";
+import type { OutboxRecord } from "./models/outbox-record";
 import type { OutboxProcessor } from "./outbox-processor";
 import type { OutboxRepository } from "./outbox-repository";
 import type { Publisher, RetryConfig } from "./types";

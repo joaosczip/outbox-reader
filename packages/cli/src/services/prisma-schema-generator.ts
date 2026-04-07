@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import * as path from "node:path";
-import { type ColumnNaming, applyNamingToTableName, getColumnNames } from "../utils/column-naming";
 import type { OutboxSchemaGenerationOptions, SchemaGenerationConfig } from "../types/schema-config";
+import { type ColumnNaming, applyNamingToTableName, getColumnNames } from "../utils/column-naming";
 
 export class PrismaSchemaGenerator {
 	private config: Required<SchemaGenerationConfig>;
@@ -41,8 +41,7 @@ export class PrismaSchemaGenerator {
 		const cols = getColumnNames(naming);
 		const dbTableName = applyNamingToTableName(tableName, naming);
 
-		const mapAnnotation = (tsName: string, dbName: string) =>
-			tsName !== dbName ? ` @map("${dbName}")` : "";
+		const mapAnnotation = (tsName: string, dbName: string) => (tsName !== dbName ? ` @map("${dbName}")` : "");
 
 		const standardFields = [
 			`id              String   @id @db.Uuid @default(dbgenerated("uuid_generate_v7()"))`,

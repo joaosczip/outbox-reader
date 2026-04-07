@@ -6,7 +6,12 @@ import type { Pool } from "pg";
 import type { JitterType } from "exponential-backoff/dist/options";
 import { OutboxRecord } from "./models/outbox-record";
 import type { RetryCallback, RetryConfig } from "./types";
-import { type ColumnNaming, type OutboxColumnNames, applyNamingToTableName, getColumnNames } from "./utils/column-naming";
+import {
+	type ColumnNaming,
+	type OutboxColumnNames,
+	applyNamingToTableName,
+	getColumnNames,
+} from "./utils/column-naming";
 
 export type OutboxRow = Record<string, unknown>;
 

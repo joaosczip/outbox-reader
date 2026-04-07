@@ -1,6 +1,6 @@
 import path from "node:path";
-import { type ColumnNaming, applyNamingToTableName, getColumnNames } from "../utils/column-naming";
 import type { SequelizeMigrationOptions } from "../types/migration-adapter-config";
+import { type ColumnNaming, applyNamingToTableName, getColumnNames } from "../utils/column-naming";
 import type { MigrationAdapter } from "./migration-adapter";
 
 export type FsWriter = (filePath: string, content: string) => Promise<void>;

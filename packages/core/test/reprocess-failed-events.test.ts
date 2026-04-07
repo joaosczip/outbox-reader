@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeEach, mock } from "bun:test";
-import type { OutboxRepository, OutboxRow } from "../src/outbox-repository";
+import { beforeEach, describe, expect, it, mock } from "bun:test";
 import { BATCH_SIZE, run } from "../src/cronjobs/reprocess-failed-events";
+import type { OutboxRepository, OutboxRow } from "../src/outbox-repository";
 
 const makeRow = (id: string): OutboxRow => ({
 	id,
@@ -18,9 +18,7 @@ const makeRow = (id: string): OutboxRow => ({
 const makeRows = (count: number, offset = 0): OutboxRow[] =>
 	Array.from({ length: count }, (_, i) => makeRow(String(i + offset)));
 
-const makeRepository = (
-	findFailedEventsResponses: OutboxRow[][],
-): OutboxRepository => {
+const makeRepository = (findFailedEventsResponses: OutboxRow[][]): OutboxRepository => {
 	let call = 0;
 	const deleteCalls: Array<[string, string]> = [];
 	const createCalls: unknown[] = [];
@@ -85,9 +83,7 @@ describe("reprocess-failed-events", () => {
 
 			for (const row of rows) {
 				expect(repo.delete).toHaveBeenCalledWith(row.id, "FAILED");
-				expect(repo.create).toHaveBeenCalledWith(
-					expect.objectContaining({ id: row.id, status: "PENDING" }),
-				);
+				expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({ id: row.id, status: "PENDING" }));
 			}
 		});
 	});

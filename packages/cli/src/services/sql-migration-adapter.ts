@@ -1,6 +1,6 @@
 import fs from "node:fs";
-import { type ColumnNaming, applyNamingToTableName, getColumnNames } from "../utils/column-naming";
 import type { SqlMigrationOptions } from "../types/migration-adapter-config";
+import { type ColumnNaming, applyNamingToTableName, getColumnNames } from "../utils/column-naming";
 import type { MigrationAdapter } from "./migration-adapter";
 
 export class SqlMigrationAdapter implements MigrationAdapter {

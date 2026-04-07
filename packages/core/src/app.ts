@@ -4,16 +4,16 @@ import { Pool } from "pg";
 import type { LogicalReplicationService, Wal2Json } from "pg-logical-replication";
 
 import { config, dbWriteRetryConfig, maxOutboxAttempts, retryQueueConfig } from "./config";
-import { processingDuration, recordsFiltered, walEventsReceived } from "./metrics";
-import { shutdownTelemetry } from "./telemetry";
 import { startHealthServer } from "./health";
 import { Logger } from "./logger";
+import { processingDuration, recordsFiltered, walEventsReceived } from "./metrics";
 import { OutboxProcessor } from "./outbox-processor";
 import { OutboxRepository } from "./outbox-repository";
 import { loadPublisherConfig } from "./publisher-config";
 import { createPublisher } from "./publisher-factory";
 import { startReplication } from "./replication";
 import { RetryQueue } from "./retry-queue";
+import { shutdownTelemetry } from "./telemetry";
 import type { Publisher } from "./types";
 
 const logger = new Logger("outbox-reader");

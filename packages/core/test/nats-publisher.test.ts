@@ -69,7 +69,12 @@ describe("NATSPublisher", () => {
 
 	describe("connect()", () => {
 		it("establishes a NATS connection", async () => {
-			const publisher = new NATSPublisher({ retryConfig, logger, connectionConfig, subjectPrefix: SUBJECT_PREFIX });
+			const publisher = new NATSPublisher({
+				retryConfig,
+				logger,
+				connectionConfig,
+				subjectPrefix: SUBJECT_PREFIX,
+			});
 
 			await publisher.connect();
 
@@ -78,7 +83,12 @@ describe("NATSPublisher", () => {
 		});
 
 		it("is a no-op when called a second time", async () => {
-			const publisher = new NATSPublisher({ retryConfig, logger, connectionConfig, subjectPrefix: SUBJECT_PREFIX });
+			const publisher = new NATSPublisher({
+				retryConfig,
+				logger,
+				connectionConfig,
+				subjectPrefix: SUBJECT_PREFIX,
+			});
 
 			await publisher.connect();
 			await publisher.connect();
@@ -90,7 +100,12 @@ describe("NATSPublisher", () => {
 
 	describe("publish()", () => {
 		it("calls connect() internally when not yet connected", async () => {
-			const publisher = new NATSPublisher({ retryConfig, logger, connectionConfig, subjectPrefix: SUBJECT_PREFIX });
+			const publisher = new NATSPublisher({
+				retryConfig,
+				logger,
+				connectionConfig,
+				subjectPrefix: SUBJECT_PREFIX,
+			});
 
 			const record = new OutboxRecord({
 				id: "1",
@@ -118,7 +133,12 @@ describe("NATSPublisher", () => {
 				deliver_policy: "new",
 			});
 
-			const publisher = new NATSPublisher({ retryConfig, logger, connectionConfig, subjectPrefix: SUBJECT_PREFIX });
+			const publisher = new NATSPublisher({
+				retryConfig,
+				logger,
+				connectionConfig,
+				subjectPrefix: SUBJECT_PREFIX,
+			});
 
 			const record = new OutboxRecord({
 				id: "2",
