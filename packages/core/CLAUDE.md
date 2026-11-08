@@ -40,7 +40,7 @@ src/
 ├── publisher-factory.ts          — instantiates publishers from YAML config
 ├── publisher-config.ts           — YAML-based publisher configuration types
 ├── retry-queue.ts                — in-memory retry queue with backoff for non-blocking record retries
-├── health.ts                     — health check endpoint
+├── health.ts                     — /live, /ready (+ /health alias) with pluggable readiness checks (setReadinessCheck)
 ├── logger.ts                     — pino logger
 ├── lib.ts                        — public API exports for programmatic use
 ├── models/
@@ -64,7 +64,7 @@ src/
 
 - **`OutboxProcessor`** (`src/outbox-processor.ts`): Filters WAL changes to outbox inserts, fetches from DB, publishes, and marks as PROCESSED/FAILED. `filterChanges()` and `processInserts()` are separate for independent testing.
 - **`OutboxRepository`** (`src/outbox-repository.ts`): DB layer. Uses `backOff` for `markAsProcessed`/`markAsFailed`. Exposes `onTransaction()` for transactional cronjob operations.
-- **`NATSPublisher`** (`src/nats-publisher.ts`): Lazy-connects to NATS on first publish. Uses `record.eventType` as subject, `record.aggregateId` as dedup `msgID`.
+- **`NATSPublisher`** (`src/nats-publisher.ts`): Lazy-connects to NATS on first publish. Uses `record.eventType` as subject, `record.id` as dedup `msgID` (unique per event; a `duplicate` PubAck is logged as a warning).
 - **`RetryQueue`** (`src/retry-queue.ts`): In-memory non-blocking retry queue. WAL stream is never blocked by individual record failures.
 
 ## Data Flow

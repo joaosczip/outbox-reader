@@ -91,8 +91,8 @@ PostgreSQL WAL → replication.ts → OutboxProcessor → NATSPublisher → NATS
 
 - **`OutboxProcessor`** (`packages/core/src/outbox-processor.ts`): Central orchestrator. Filters WAL changes to outbox inserts, processes them, and delegates to repository and publisher. Both `filterChanges()` and `processInserts()` are separate to allow independent testing.
 - **`OutboxRepository`** (`packages/core/src/outbox-repository.ts`): All DB interactions via a `pg.Pool`. Uses `backOff` (exponential-backoff) for `markAsProcessed`/`markAsFailed` writes. Exposes `onTransaction()` for transactional cronjob operations (uses a `Proxy` to swap the pool client transparently).
-- **`NATSPublisher`** (`packages/core/src/nats-publisher.ts`): Lazy-connects to NATS on first publish. Implements the `Publisher` interface. Uses `backOff` for retries. Publishes using `record.eventType` as the subject and `record.aggregateId` as the dedup `msgID`.
-- **`startReplication`** (`packages/core/src/replication.ts`): Thin wrapper around `LogicalReplicationService`. Appends `?replication=database` to the connection string.
+- **`NATSPublisher`** (`packages/core/src/nats-publisher.ts`): Lazy-connects to NATS on first publish. Implements the `Publisher` interface. Uses `backOff` for retries. Publishes using `record.eventType` as the subject and `record.id` as the dedup `msgID` (unique per event, so retries of the same record are deduplicated but distinct events of one aggregate are not; a `duplicate` PubAck is logged as a warning).
+- **`startReplication`** (`packages/core/src/replication.ts`): Thin wrapper around `LogicalReplicationService`. Sets `replication=database` on the connection string via `buildReplicationConnectionString()` (preserves existing query params). Uses manual LSN acknowledgement: each LSN is acked only after `onChange` resolves; failures and service `error` events go to the optional `onError` callback.
 
 ### Retry Pattern
 
@@ -115,7 +115,15 @@ All retry-capable operations accept a `RetryConfig` with `numOfAttempts`, `start
 
 Required:
 - `DATABASE_URL`: PostgreSQL connection string (logical replication must be enabled on the DB)
-- `REPLICATION_SLOT_NAME`: Name of the PostgreSQL replication slot
+- `REPLICATION_SLOT_NAME`: Name of the PostgreSQL replication slot (replication service only; cronjobs do not need it — they use `loadCronConfig()`)
+
+Optional (validated when read; invalid values throw a descriptive error instead of silently becoming `NaN`):
+- `DB_POOL_SIZE`: integer >= 1, default `10`
+- `MAX_OUTBOX_ATTEMPTS`: integer >= 1, default `5`
+- `COLUMN_NAMING`: `snake_case` | `camelCase` | `PascalCase`, default `snake_case`
+- `TABLE_NAME`: default `outbox`
+- `PUBLISHER_CONFIG_PATH`: default `./publisher.yaml` (validated per provider by `loadPublisherConfig`)
+- `PENDING_EVENTS_THRESHOLD_MINUTES` (cronjobs): integer >= 1, default `10`
 
 See `.env.example` and `packages/core/src/config.ts` for all NATS and optional variables.
 
