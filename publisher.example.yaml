@@ -8,7 +8,7 @@ retryConfig:
   numOfAttempts: 5
   startingDelayInMs: 500
   maxDelayInMs: 5000
-  jitter: full  # Options: full | none | fixed
+  jitter: full  # Options: full | none
 
 options:
   # NATS connection options
