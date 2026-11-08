@@ -258,14 +258,23 @@ describe("check-pending-events (stale PENDING sweeper)", () => {
 				concurrency: 3,
 			});
 
-			expect(summary).toEqual({ scanned: 7, republished: 4, failed: 3 });
+			// a1 and a2 share aggregate A; c1 and c2 share C. A failed head leaves the tail PENDING.
+			expect(summary).toEqual({ scanned: 7, republished: 2, failed: 3 });
 			expect(repository.markAsFailedCalls.map((c) => c.id).sort()).toEqual(["a1", "b2", "c1"]);
-			expect(processor.processInsertsCalls.map((c) => c.insertedRecord.id).sort()).toEqual([...ids].sort());
-			for (const id of ids) {
-				expect(repository.getRecord(id)?.status).toBe(
-					failing.has(id) ? OutboxStatus.FAILED : OutboxStatus.PROCESSED,
-				);
-			}
+			expect(processor.processInsertsCalls.map((c) => c.insertedRecord.id).sort()).toEqual([
+				"a1",
+				"b1",
+				"b2",
+				"c1",
+				"d1",
+			]);
+			expect(repository.getRecord("a1")?.status).toBe(OutboxStatus.FAILED);
+			expect(repository.getRecord("a2")?.status).toBe(OutboxStatus.PENDING);
+			expect(repository.getRecord("b1")?.status).toBe(OutboxStatus.PROCESSED);
+			expect(repository.getRecord("b2")?.status).toBe(OutboxStatus.FAILED);
+			expect(repository.getRecord("c1")?.status).toBe(OutboxStatus.FAILED);
+			expect(repository.getRecord("c2")?.status).toBe(OutboxStatus.PENDING);
+			expect(repository.getRecord("d1")?.status).toBe(OutboxStatus.PROCESSED);
 		});
 
 		it("rejects an invalid concurrency", async () => {

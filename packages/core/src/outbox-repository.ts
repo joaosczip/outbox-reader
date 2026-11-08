@@ -122,7 +122,7 @@ export class OutboxRepository {
 			       ${c.createdAt}, ${c.processedAt}, ${c.status}, ${c.attempts}
 			FROM ${this.tableName}
 			WHERE ${c.status} = 'FAILED'
-			ORDER BY ${c.createdAt} ASC
+			ORDER BY ${c.createdAt} ASC, ${c.id} ASC
 			LIMIT $1
 		`;
 		const result = await this.pool.query(query, [limit]);
@@ -133,6 +133,11 @@ export class OutboxRepository {
 	 * PENDING records created more than `olderThanMinutes` ago (oldest first), i.e. events
 	 * the main service most likely lost (crash, lost in-memory retry, acked-but-unprocessed WAL).
 	 * The cutoff is computed by the database clock to avoid app/DB clock skew.
+	 *
+	 * `created_at` stays the leading range predicate so the partial index
+	 * `(created_at) WHERE status = 'PENDING'` can be used. A row requeued recently
+	 * (old `created_at`, fresh `requeued_at`) is not stale; a never-requeued old PENDING row is.
+	 * Do not replace the predicate with `COALESCE(requeued_at, created_at)`.
 	 */
 	async findStalePendingEvents({
 		olderThanMinutes,
@@ -146,12 +151,68 @@ export class OutboxRepository {
 			SELECT ${c.id}, ${c.aggregateId}, ${c.aggregateType}, ${c.eventType}, ${c.payload}, ${c.sequenceNumber},
 			       ${c.createdAt}, ${c.processedAt}, ${c.status}, ${c.attempts}
 			FROM ${this.tableName}
-			WHERE ${c.status} = 'PENDING' AND ${c.createdAt} < NOW() - make_interval(mins => $1::int)
-			ORDER BY ${c.createdAt} ASC
+			WHERE ${c.status} = 'PENDING'
+			  AND ${c.createdAt} < NOW() - make_interval(mins => $1::int)
+			  AND (${c.requeuedAt} IS NULL OR ${c.requeuedAt} < NOW() - make_interval(mins => $1::int))
+			ORDER BY ${c.createdAt} ASC, ${c.id} ASC
 			LIMIT $2
 		`;
 		const result = await this.pool.query(query, [olderThanMinutes, limit]);
 		return result.rows.map((row: OutboxRow) => this.rowToRecord(row));
+	}
+
+	/**
+	 * True when an older sibling of the same aggregate is still PENDING or FAILED.
+	 *
+	 * DEAD is terminal and does not block: it is not part of either branch. The two
+	 * `status = '...'` branches are unioned (not `status = ANY(...)` / `IN (...)`) so each
+	 * can use its partial index on `(aggregate_id, created_at, id)`. The row comparison
+	 * excludes the record itself. Order key is the immutable `(created_at, id)`.
+	 */
+	async hasOlderPendingOrFailed(record: OutboxRecord): Promise<boolean> {
+		const c = this.qcols;
+		const olderThan = `(${c.createdAt}, ${c.id}) < ($2::timestamp, $3::uuid)`;
+		const query = `
+			SELECT 1
+			FROM (
+				SELECT 1
+				FROM ${this.tableName}
+				WHERE ${c.status} = 'PENDING'
+				  AND ${c.aggregateId} = $1
+				  AND ${olderThan}
+				UNION ALL
+				SELECT 1
+				FROM ${this.tableName}
+				WHERE ${c.status} = 'FAILED'
+				  AND ${c.aggregateId} = $1
+				  AND ${olderThan}
+			) AS older
+			LIMIT 1
+		`;
+		const result = await this.pool.query(query, [record.aggregateId, record.createdAt, record.id]);
+		return result.rows.length > 0;
+	}
+
+	/**
+	 * Oldest PENDING row of the aggregate that has no older PENDING or FAILED sibling,
+	 * or null when the oldest PENDING row is still blocked (or there is none).
+	 */
+	async findNextReadyPending(aggregateId: string): Promise<OutboxRecord | null> {
+		const c = this.qcols;
+		const query = `
+			SELECT ${c.id}, ${c.aggregateId}, ${c.aggregateType}, ${c.eventType}, ${c.payload}, ${c.sequenceNumber},
+			       ${c.createdAt}, ${c.processedAt}, ${c.status}, ${c.attempts}
+			FROM ${this.tableName}
+			WHERE ${c.status} = 'PENDING' AND ${c.aggregateId} = $1
+			ORDER BY ${c.createdAt} ASC, ${c.id} ASC
+			LIMIT 1
+		`;
+		const result = await this.pool.query(query, [aggregateId]);
+		const row: OutboxRow | undefined = result.rows[0];
+		if (!row) return null;
+		const oldest = this.rowToRecord(row);
+		if (await this.hasOlderPendingOrFailed(oldest)) return null;
+		return oldest;
 	}
 
 	async create(params: CreateOutboxRecordParams): Promise<string> {
@@ -442,11 +503,12 @@ export class OutboxRepository {
 
 	/**
 	 * Set-based requeue for the reprocess cron: in ONE statement, deletes the given records that
-	 * are still FAILED and re-inserts them as PENDING (same id, attempts, payload, sequence number;
-	 * `created_at = NOW()`, `processed_at` NULL). The re-INSERT is what produces the WAL event the
-	 * replication service reacts to. Rows are inserted in their original `created_at` order so the
-	 * per-aggregate WAL order is preserved. Returns the ids actually requeued (records that are no
-	 * longer FAILED are skipped).
+	 * are still FAILED and re-inserts them as PENDING (same id, attempts, payload, sequence number).
+	 * `created_at` is copied from the deleted row — it is the immutable order key and must not be
+	 * replaced with `NOW()`. `requeued_at = NOW()` records when the row was requeued (staleness
+	 * only); `processed_at` is NULL. The re-INSERT produces the WAL event the replication service
+	 * reacts to. Rows are inserted in `(created_at, id)` order. Returns the ids actually requeued
+	 * (records that are no longer FAILED are skipped).
 	 */
 	async requeueFailed(ids: string[]): Promise<string[]> {
 		if (ids.length === 0) return [];
@@ -470,13 +532,13 @@ export class OutboxRepository {
 			INSERT INTO ${this.tableName} (
 				${c.id}, ${c.aggregateId}, ${c.aggregateType}, ${c.eventType},
 				${c.payload}, ${c.sequenceNumber}, ${c.status}, ${c.attempts},
-				${c.createdAt}
+				${c.createdAt}, ${c.requeuedAt}, ${c.processedAt}
 			)
 			SELECT ${m(c.id)}, ${m(c.aggregateId)}, ${m(c.aggregateType)}, ${m(c.eventType)},
 				${m(c.payload)}, ${m(c.sequenceNumber)}, 'PENDING', ${m(c.attempts)},
-				NOW()
+				${m(c.createdAt)}, NOW(), NULL
 			FROM moved
-			ORDER BY ${m(c.createdAt)} ASC
+			ORDER BY ${m(c.createdAt)} ASC, ${m(c.id)} ASC
 			RETURNING ${c.id}
 		`;
 		const result = await this.pool.query(query, [ids]);

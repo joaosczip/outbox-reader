@@ -117,7 +117,7 @@ describe("OutboxRepository", () => {
 			await repository.findFailedEvents(25);
 
 			const sql = normalizeSql(pool.lastCall().text);
-			expect(sql).toContain(`WHERE "status" = 'FAILED' ORDER BY "created_at" ASC LIMIT $1`);
+			expect(sql).toContain(`WHERE "status" = 'FAILED' ORDER BY "created_at" ASC, "id" ASC LIMIT $1`);
 			expect(pool.lastCall().params).toEqual([25]);
 		});
 
@@ -127,7 +127,7 @@ describe("OutboxRepository", () => {
 
 			const records = await repository.findFailedEvents();
 
-			expect(normalizeSql(pool.lastCall().text)).toContain('ORDER BY "createdAt" ASC');
+			expect(normalizeSql(pool.lastCall().text)).toContain('ORDER BY "createdAt" ASC, "id" ASC');
 			expect(records).toHaveLength(1);
 			expect(records[0]).toBeInstanceOf(OutboxRecord);
 			expect(records[0]).toMatchObject({
@@ -367,8 +367,10 @@ describe("OutboxRepository.findStalePendingEvents", () => {
 		const sql = normalizeSql(pool.lastCall().text);
 		expect(sql).toContain('FROM "outbox"');
 		expect(sql).toContain(`WHERE "status" = 'PENDING' AND "createdAt" < NOW() - make_interval(mins => $1::int)`);
+		expect(sql).toContain(`AND ("requeuedAt" IS NULL OR "requeuedAt" < NOW() - make_interval(mins => $1::int))`);
 		expect(sql).not.toContain(">=");
-		expect(sql).toContain('ORDER BY "createdAt" ASC LIMIT $2');
+		expect(sql).not.toContain("COALESCE");
+		expect(sql).toContain('ORDER BY "createdAt" ASC, "id" ASC LIMIT $2');
 		expect(pool.lastCall().params).toEqual([15, 50]);
 	});
 
@@ -378,8 +380,10 @@ describe("OutboxRepository.findStalePendingEvents", () => {
 		await repository.findStalePendingEvents({ olderThanMinutes: 10, limit: 100 });
 
 		const sql = normalizeSql(pool.lastCall().text);
-		expect(sql).toContain(`WHERE "status" = 'PENDING' AND "created_at" < NOW() - make_interval(mins => $1::int)`);
-		expect(sql).toContain('ORDER BY "created_at" ASC LIMIT $2');
+		expect(sql).toContain(
+			`WHERE "status" = 'PENDING' AND "created_at" < NOW() - make_interval(mins => $1::int) AND ("requeued_at" IS NULL OR "requeued_at" < NOW() - make_interval(mins => $1::int)) ORDER BY "created_at" ASC, "id" ASC LIMIT $2`,
+		);
+		expect(sql).not.toContain("COALESCE");
 	});
 
 	it("maps rows to OutboxRecord instances", async () => {
@@ -407,6 +411,126 @@ describe("OutboxRepository.findStalePendingEvents", () => {
 		});
 		expect(records[0].createdAt?.toISOString()).toBe("2026-01-01T00:00:00.000Z");
 		expect(records[1].id).toBe("2");
+	});
+});
+
+describe("OutboxRepository aggregate order predicates", () => {
+	let pool: MockPgPool;
+
+	beforeEach(() => {
+		pool = new MockPgPool();
+	});
+
+	const record = new OutboxRecord({
+		id: "11111111-1111-1111-1111-111111111111",
+		aggregateId: "agg-1",
+		aggregateType: "User",
+		eventType: "user.created",
+		payload: {},
+		createdAt: "2020-01-02T00:00:00.000Z",
+		status: OutboxStatus.PENDING,
+	});
+
+	it("hasOlderPendingOrFailed unions literal PENDING and FAILED branches and returns false when none match", async () => {
+		const repository = makeRepository(pool);
+
+		expect(await repository.hasOlderPendingOrFailed(record)).toBe(false);
+
+		const sql = normalizeSql(pool.lastCall().text);
+		expect(sql).toContain(`"status" = 'PENDING'`);
+		expect(sql).toContain(`"status" = 'FAILED'`);
+		expect(sql).toContain("UNION ALL");
+		expect(sql).toContain(`("created_at", "id") < ($2::timestamp, $3::uuid)`);
+		expect(sql).toContain(`"aggregate_id" = $1`);
+		expect(sql).toContain("LIMIT 1");
+		expect(sql).not.toContain("ANY");
+		expect(sql).not.toContain(" IN ");
+		expect(sql).not.toContain("DEAD");
+		expect(pool.lastCall().params).toEqual(["agg-1", record.createdAt, record.id]);
+	});
+
+	it("quotes camelCase identifiers in the predecessor check", async () => {
+		const repository = makeRepository(pool, "camelCase", "my_outbox");
+
+		await repository.hasOlderPendingOrFailed(record);
+
+		const sql = normalizeSql(pool.lastCall().text);
+		expect(sql).toContain(`FROM "myOutbox"`);
+		expect(sql).toContain(
+			`"status" = 'PENDING' AND "aggregateId" = $1 AND ("createdAt", "id") < ($2::timestamp, $3::uuid)`,
+		);
+		expect(sql).toContain(
+			`"status" = 'FAILED' AND "aggregateId" = $1 AND ("createdAt", "id") < ($2::timestamp, $3::uuid)`,
+		);
+	});
+
+	it("returns true when a predecessor row exists", async () => {
+		const repository = makeRepository(pool);
+		pool.enqueueResult({ rows: [{ "?column?": 1 }], rowCount: 1 });
+
+		expect(await repository.hasOlderPendingOrFailed(record)).toBe(true);
+	});
+
+	it("findNextReadyPending returns null when the aggregate has no PENDING row", async () => {
+		const repository = makeRepository(pool);
+
+		expect(await repository.findNextReadyPending("agg-1")).toBeNull();
+
+		const sql = normalizeSql(pool.lastCall().text);
+		expect(sql).toContain(`WHERE "status" = 'PENDING' AND "aggregate_id" = $1`);
+		expect(sql).toContain(`ORDER BY "created_at" ASC, "id" ASC LIMIT 1`);
+		expect(pool.calls).toHaveLength(1);
+		expect(pool.lastCall().params).toEqual(["agg-1"]);
+	});
+
+	it("findNextReadyPending returns the oldest PENDING row when no older FAILED sibling exists", async () => {
+		const repository = makeRepository(pool);
+		pool.enqueueResult({
+			rows: [
+				{
+					id: "9",
+					aggregate_id: "agg-9",
+					aggregate_type: "Order",
+					event_type: "order.placed",
+					payload: {},
+					sequence_number: 3,
+					created_at: new Date("2020-01-01T00:00:00.000Z"),
+					processed_at: null,
+					status: "PENDING",
+					attempts: 0,
+				},
+			],
+		});
+		pool.enqueueResult({ rows: [], rowCount: 0 });
+
+		const next = await repository.findNextReadyPending("agg-9");
+
+		expect(next).toMatchObject({ id: "9", aggregateId: "agg-9", status: OutboxStatus.PENDING });
+		expect(pool.calls).toHaveLength(2);
+		expect(normalizeSql(pool.calls[1].text)).toContain(`"status" = 'FAILED'`);
+	});
+
+	it("findNextReadyPending returns null when an older FAILED sibling blocks the oldest PENDING row", async () => {
+		const repository = makeRepository(pool);
+		pool.enqueueResult({
+			rows: [
+				{
+					id: "9",
+					aggregate_id: "agg-9",
+					aggregate_type: "Order",
+					event_type: "order.placed",
+					payload: {},
+					sequence_number: 3,
+					created_at: new Date("2020-01-02T00:00:00.000Z"),
+					processed_at: null,
+					status: "PENDING",
+					attempts: 0,
+				},
+			],
+		});
+		pool.enqueueResult({ rows: [{ "?column?": 1 }], rowCount: 1 });
+
+		expect(await repository.findNextReadyPending("agg-9")).toBeNull();
 	});
 });
 
@@ -629,13 +753,13 @@ describe("OutboxRepository.requeueFailed", () => {
 				INSERT INTO "outbox" (
 					"id", "aggregate_id", "aggregate_type", "event_type",
 					"payload", "sequence_number", "status", "attempts",
-					"created_at"
+					"created_at", "requeued_at", "processed_at"
 				)
 				SELECT moved."id", moved."aggregate_id", moved."aggregate_type", moved."event_type",
 					moved."payload", moved."sequence_number", 'PENDING', moved."attempts",
-					NOW()
+					moved."created_at", NOW(), NULL
 				FROM moved
-				ORDER BY moved."created_at" ASC
+				ORDER BY moved."created_at" ASC, moved."id" ASC
 				RETURNING "id"
 			`),
 		);
@@ -652,7 +776,9 @@ describe("OutboxRepository.requeueFailed", () => {
 		expect(sql).toContain(`DELETE FROM "Outbox" WHERE "id" = ANY($1) AND "status" = 'FAILED'`);
 		expect(sql).toContain(`RETURNING "id", "AggregateId", "AggregateType", "EventType"`);
 		expect(sql).toContain(`INSERT INTO "Outbox" (`);
-		expect(sql).toContain(`ORDER BY moved."CreatedAt" ASC RETURNING "id"`);
+		expect(sql).toContain(`"RequeuedAt", "ProcessedAt"`);
+		expect(sql).toContain(`moved."CreatedAt", NOW(), NULL`);
+		expect(sql).toContain(`ORDER BY moved."CreatedAt" ASC, moved."id" ASC RETURNING "id"`);
 	});
 
 	it("does not query for an empty id list", async () => {
