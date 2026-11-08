@@ -379,8 +379,11 @@ export class OutboxRepository {
 	 * A row is deleted only when all of these hold: status is PROCESSED or DEAD (never
 	 * PENDING or FAILED), `created_at < cutoff`, and `COALESCE(processed_at, created_at) < cutoff`.
 	 * Each statement embeds one status as a SQL literal so the planner can match a partial
-	 * index. `status = ANY($1)` is not used. When `statuses` lists more than one, each status
-	 * runs to completion with its own `limit` and the return value is the sum of the statements.
+	 * index. `status = ANY($1)` is not used. Rows are deleted by `ctid = ANY (ARRAY(SELECT ctid ...))`.
+	 * On PostgreSQL 16 a generic plan of `id IN (SELECT id ...)` sequential-scans the outer
+	 * table; the ctid form is an index scan of the batch plus a tid scan. When `statuses`
+	 * lists more than one, each status runs to completion with its own `limit` and the return
+	 * value is the sum of the statements.
 	 *
 	 * PROCESSED uses two statements that share `limit`:
 	 * 1. Hot path, written for partial index `idx_<table>_processed_processed_at` on
@@ -437,13 +440,12 @@ export class OutboxRepository {
 	}
 
 	private async deleteBySubquery(whereOrderLimit: string, olderThanDays: number, limit: number): Promise<number> {
-		const c = this.qcols;
 		const query = `
 			DELETE FROM ${this.tableName}
-			WHERE ${c.id} IN (
-				SELECT ${c.id} FROM ${this.tableName}
+			WHERE ctid = ANY (ARRAY(
+				SELECT ctid FROM ${this.tableName}
 				${whereOrderLimit}
-			)
+			))
 		`;
 		const result = await this.pool.query(query, [olderThanDays, limit]);
 		return result.rowCount ?? 0;

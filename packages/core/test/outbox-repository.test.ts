@@ -543,27 +543,27 @@ describe("OutboxRepository.deleteProcessedBefore", () => {
 
 	const processedHotPath = `
 		DELETE FROM "outbox"
-		WHERE "id" IN (
-			SELECT "id" FROM "outbox"
+		WHERE ctid = ANY (ARRAY(
+			SELECT ctid FROM "outbox"
 			WHERE "status" = 'PROCESSED'
 			  AND "processed_at" IS NOT NULL
 			  AND "processed_at" < NOW() - make_interval(days => $1::int)
 			  AND "created_at" < NOW() - make_interval(days => $1::int)
 			ORDER BY "processed_at" ASC
 			LIMIT $2
-		)
+		))
 	`;
 
 	const processedNullFallback = `
 		DELETE FROM "outbox"
-		WHERE "id" IN (
-			SELECT "id" FROM "outbox"
+		WHERE ctid = ANY (ARRAY(
+			SELECT ctid FROM "outbox"
 			WHERE "status" = 'PROCESSED'
 			  AND "processed_at" IS NULL
 			  AND "created_at" < NOW() - make_interval(days => $1::int)
 			ORDER BY "created_at" ASC
 			LIMIT $2
-		)
+		))
 	`;
 
 	it("deletes PROCESSED rows on the processed_at index and skips the null fallback when the batch is full", async () => {
@@ -580,7 +580,7 @@ describe("OutboxRepository.deleteProcessedBefore", () => {
 		expect(pool.calls).toHaveLength(1);
 		expect(normalizeSql(pool.calls[0].text)).toBe(normalizeSql(processedHotPath));
 		expect(pool.calls[0].params).toEqual([7, 500]);
-		expect(pool.calls[0].text).not.toContain("ANY(");
+		expect(pool.calls[0].text).not.toContain("status = ANY");
 	});
 
 	it("follows a short PROCESSED batch with the null processed_at fallback and returns the sum", async () => {
@@ -634,18 +634,18 @@ describe("OutboxRepository.deleteProcessedBefore", () => {
 		expect(normalizeSql(pool.calls[0].text)).toBe(
 			normalizeSql(`
 				DELETE FROM "outbox"
-				WHERE "id" IN (
-					SELECT "id" FROM "outbox"
+				WHERE ctid = ANY (ARRAY(
+					SELECT ctid FROM "outbox"
 					WHERE "status" = 'DEAD'
 					  AND "created_at" < NOW() - make_interval(days => $1::int)
 					  AND COALESCE("processed_at", "created_at") < NOW() - make_interval(days => $1::int)
 					ORDER BY "created_at" ASC
 					LIMIT $2
-				)
+				))
 			`),
 		);
 		expect(pool.calls[0].params).toEqual([30, 10]);
-		expect(pool.calls[0].text).not.toContain("ANY(");
+		expect(pool.calls[0].text).not.toContain("status = ANY");
 	});
 
 	it("quotes camelCase identifiers for the DEAD purge", async () => {
@@ -657,14 +657,14 @@ describe("OutboxRepository.deleteProcessedBefore", () => {
 		expect(normalizeSql(pool.lastCall().text)).toBe(
 			normalizeSql(`
 				DELETE FROM "myOutbox"
-				WHERE "id" IN (
-					SELECT "id" FROM "myOutbox"
+				WHERE ctid = ANY (ARRAY(
+					SELECT ctid FROM "myOutbox"
 					WHERE "status" = 'DEAD'
 					  AND "createdAt" < NOW() - make_interval(days => $1::int)
 					  AND COALESCE("processedAt", "createdAt") < NOW() - make_interval(days => $1::int)
 					ORDER BY "createdAt" ASC
 					LIMIT $2
-				)
+				))
 			`),
 		);
 		expect(pool.lastCall().params).toEqual([30, 10]);
