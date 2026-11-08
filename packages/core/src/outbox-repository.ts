@@ -310,15 +310,30 @@ export class OutboxRepository {
 	}
 
 	/**
-	 * Retention purge: deletes ONE bounded batch (at most `limit` rows) of terminal records
-	 * (PROCESSED/DEAD only) older than `olderThanDays`, and returns how many were deleted.
-	 * Callers loop until a batch deletes fewer than `limit`, which keeps each transaction and
-	 * its row locks short. The cutoff uses the database clock (no app/DB clock skew).
+	 * Retention purge: deletes one bounded batch of terminal records (PROCESSED/DEAD only)
+	 * older than `olderThanDays`, and returns how many rows this call deleted. Callers loop
+	 * until a batch deletes fewer than `limit`. The cutoff is the database clock,
+	 * `NOW() - make_interval(days => $1::int)`.
 	 *
-	 * Age is `COALESCE(processed_at, created_at)`: PROCESSED rows always have `processed_at`,
-	 * DEAD rows usually do not (they never published), so their creation time is used. The
-	 * extra `created_at < cutoff` predicate is redundant (`processed_at >= created_at`) but
-	 * lets the planner range-scan the existing `created_at` index instead of the whole table.
+	 * A row is deleted only when all of these hold: status is PROCESSED or DEAD (never
+	 * PENDING or FAILED), `created_at < cutoff`, and `COALESCE(processed_at, created_at) < cutoff`.
+	 * Each statement embeds one status as a SQL literal so the planner can match a partial
+	 * index. `status = ANY($1)` is not used. When `statuses` lists more than one, each status
+	 * runs to completion with its own `limit` and the return value is the sum of the statements.
+	 *
+	 * PROCESSED uses two statements that share `limit`:
+	 * 1. Hot path, written for partial index `idx_<table>_processed_processed_at` on
+	 *    `(processed_at) WHERE status = 'PROCESSED'`: `processed_at IS NOT NULL AND
+	 *    processed_at < cutoff AND created_at < cutoff`, ordered by `processed_at`.
+	 * 2. Only when statement 1 deleted fewer than `limit` (remaining = `limit - deleted`).
+	 *    Null `processed_at` keeps the COALESCE fallback (`status = 'PROCESSED' AND
+	 *    processed_at IS NULL AND created_at < cutoff`), ordered by `created_at`. That case
+	 *    is rare and has no dedicated index, so the statement may scan.
+	 *
+	 * DEAD is one statement, written for partial index `idx_<table>_dead_created_at` on
+	 * `(created_at) WHERE status = 'DEAD'`: `created_at < cutoff AND
+	 * COALESCE(processed_at, created_at) < cutoff`, ordered by `created_at`. `COALESCE` is a
+	 * residual filter; the `created_at` range matches the partial index.
 	 */
 	async deleteProcessedBefore({
 		olderThanDays,
@@ -345,20 +360,84 @@ export class OutboxRepository {
 		}
 		if (statuses.length === 0) return 0;
 
+		let deleted = 0;
+		for (const status of statuses) {
+			deleted +=
+				status === "PROCESSED"
+					? await this.deleteProcessedBatch(olderThanDays, limit)
+					: await this.deleteDeadBatch(olderThanDays, limit);
+		}
+		return deleted;
+	}
+
+	/** `NOW() - make_interval(days => $1::int)`. `$2` is the batch limit. */
+	private purgeCutoffSql(): string {
+		return "NOW() - make_interval(days => $1::int)";
+	}
+
+	private async deleteBySubquery(whereOrderLimit: string, olderThanDays: number, limit: number): Promise<number> {
 		const c = this.qcols;
-		const cutoff = "NOW() - make_interval(days => $2::int)";
 		const query = `
 			DELETE FROM ${this.tableName}
 			WHERE ${c.id} IN (
 				SELECT ${c.id} FROM ${this.tableName}
-				WHERE ${c.status} = ANY($1)
-				  AND ${c.createdAt} < ${cutoff}
-				  AND COALESCE(${c.processedAt}, ${c.createdAt}) < ${cutoff}
-				LIMIT $3
+				${whereOrderLimit}
 			)
 		`;
-		const result = await this.pool.query(query, [[...statuses], olderThanDays, limit]);
+		const result = await this.pool.query(query, [olderThanDays, limit]);
 		return result.rowCount ?? 0;
+	}
+
+	/**
+	 * PROCESSED batch. Statement 1 is written for `idx_<table>_processed_processed_at`
+	 * (`(processed_at) WHERE status = 'PROCESSED'`). Statement 2 runs only for a short batch
+	 * and covers `processed_at IS NULL` (age falls back to `created_at`). It has no index of its
+	 * own and may scan.
+	 */
+	private async deleteProcessedBatch(olderThanDays: number, limit: number): Promise<number> {
+		const c = this.qcols;
+		const cutoff = this.purgeCutoffSql();
+		const deleted = await this.deleteBySubquery(
+			`WHERE ${c.status} = 'PROCESSED'
+				  AND ${c.processedAt} IS NOT NULL
+				  AND ${c.processedAt} < ${cutoff}
+				  AND ${c.createdAt} < ${cutoff}
+				ORDER BY ${c.processedAt} ASC
+				LIMIT $2`,
+			olderThanDays,
+			limit,
+		);
+		if (deleted >= limit) return deleted;
+
+		const fallback = await this.deleteBySubquery(
+			`WHERE ${c.status} = 'PROCESSED'
+				  AND ${c.processedAt} IS NULL
+				  AND ${c.createdAt} < ${cutoff}
+				ORDER BY ${c.createdAt} ASC
+				LIMIT $2`,
+			olderThanDays,
+			limit - deleted,
+		);
+		return deleted + fallback;
+	}
+
+	/**
+	 * DEAD batch, written for `idx_<table>_dead_created_at`
+	 * (`(created_at) WHERE status = 'DEAD'`). `COALESCE(processed_at, created_at) < cutoff`
+	 * is a residual filter on top of the `created_at` range.
+	 */
+	private async deleteDeadBatch(olderThanDays: number, limit: number): Promise<number> {
+		const c = this.qcols;
+		const cutoff = this.purgeCutoffSql();
+		return this.deleteBySubquery(
+			`WHERE ${c.status} = 'DEAD'
+				  AND ${c.createdAt} < ${cutoff}
+				  AND COALESCE(${c.processedAt}, ${c.createdAt}) < ${cutoff}
+				ORDER BY ${c.createdAt} ASC
+				LIMIT $2`,
+			olderThanDays,
+			limit,
+		);
 	}
 
 	/**

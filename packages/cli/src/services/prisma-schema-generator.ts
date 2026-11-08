@@ -106,6 +106,8 @@ export class PrismaSchemaGenerator {
   @@map("${dbTableName}")
   @@index([createdAt], map: "idx_${dbTableName}_pending_created_at", where: { status: "PENDING" })
   @@index([createdAt], map: "idx_${dbTableName}_failed_created_at", where: { status: "FAILED" })
+  @@index([processedAt], map: "idx_${dbTableName}_processed_processed_at", where: { status: "PROCESSED" })
+  @@index([createdAt], map: "idx_${dbTableName}_dead_created_at", where: { status: "DEAD" })
 }`;
 	}
 

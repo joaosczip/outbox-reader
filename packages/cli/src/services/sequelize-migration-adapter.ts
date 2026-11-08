@@ -123,7 +123,8 @@ module.exports = {
       },
     });
 
-    // Partial indexes for the only status-based reads (FAILED reprocessing, stale PENDING sweep).
+    // Partial indexes for FAILED reprocessing, the stale PENDING sweep, and the retention purge
+    // (PROCESSED on processed_at, DEAD on created_at).
     await queryInterface.addIndex("${tableName}", ["${cols.createdAt}"], {
       name: "idx_${tableName}_pending_created_at",
       where: { ${cols.status}: "PENDING" },
@@ -131,6 +132,14 @@ module.exports = {
     await queryInterface.addIndex("${tableName}", ["${cols.createdAt}"], {
       name: "idx_${tableName}_failed_created_at",
       where: { ${cols.status}: "FAILED" },
+    });
+    await queryInterface.addIndex("${tableName}", ["${cols.processedAt}"], {
+      name: "idx_${tableName}_processed_processed_at",
+      where: { ${cols.status}: "PROCESSED" },
+    });
+    await queryInterface.addIndex("${tableName}", ["${cols.createdAt}"], {
+      name: "idx_${tableName}_dead_created_at",
+      where: { ${cols.status}: "DEAD" },
     });
   },
 

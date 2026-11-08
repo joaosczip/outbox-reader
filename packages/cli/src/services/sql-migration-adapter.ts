@@ -41,11 +41,14 @@ CREATE TABLE IF NOT EXISTS ${t} (
   ${q(cols.sequenceNumber)} BIGINT
 );
 
--- Partial indexes matching the only status-based reads (FAILED reprocessing and the stale
--- PENDING sweeper). They stay small because PROCESSED/DEAD rows (the vast majority) are not
--- indexed, and a PENDING -> PROCESSED update adds no entry to them.
+-- Partial indexes for the status-based reads and the retention purge.
+-- PENDING and FAILED stay small (terminal rows are excluded). Purge of PROCESSED rows
+-- range-scans processed_at; purge of DEAD rows range-scans created_at. Becoming PROCESSED
+-- adds one entry to the PROCESSED index. The null processed_at purge fallback has no index of its own.
 CREATE INDEX IF NOT EXISTS ${q(`idx_${tableName}_pending_created_at`)} ON ${t}(${q(cols.createdAt)}) WHERE ${q(cols.status)} = 'PENDING';
 CREATE INDEX IF NOT EXISTS ${q(`idx_${tableName}_failed_created_at`)} ON ${t}(${q(cols.createdAt)}) WHERE ${q(cols.status)} = 'FAILED';
+CREATE INDEX IF NOT EXISTS ${q(`idx_${tableName}_processed_processed_at`)} ON ${t}(${q(cols.processedAt)}) WHERE ${q(cols.status)} = 'PROCESSED';
+CREATE INDEX IF NOT EXISTS ${q(`idx_${tableName}_dead_created_at`)} ON ${t}(${q(cols.createdAt)}) WHERE ${q(cols.status)} = 'DEAD';
 `;
 	}
 }

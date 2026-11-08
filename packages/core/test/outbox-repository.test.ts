@@ -417,9 +417,34 @@ describe("OutboxRepository.deleteProcessedBefore", () => {
 		pool = new MockPgPool();
 	});
 
-	it("deletes one bounded batch of terminal records older than the retention, using the DB clock", async () => {
+	const processedHotPath = `
+		DELETE FROM "outbox"
+		WHERE "id" IN (
+			SELECT "id" FROM "outbox"
+			WHERE "status" = 'PROCESSED'
+			  AND "processed_at" IS NOT NULL
+			  AND "processed_at" < NOW() - make_interval(days => $1::int)
+			  AND "created_at" < NOW() - make_interval(days => $1::int)
+			ORDER BY "processed_at" ASC
+			LIMIT $2
+		)
+	`;
+
+	const processedNullFallback = `
+		DELETE FROM "outbox"
+		WHERE "id" IN (
+			SELECT "id" FROM "outbox"
+			WHERE "status" = 'PROCESSED'
+			  AND "processed_at" IS NULL
+			  AND "created_at" < NOW() - make_interval(days => $1::int)
+			ORDER BY "created_at" ASC
+			LIMIT $2
+		)
+	`;
+
+	it("deletes PROCESSED rows on the processed_at index and skips the null fallback when the batch is full", async () => {
 		const repository = makeRepository(pool);
-		pool.enqueueResult({ rowCount: 42 });
+		pool.enqueueResult({ rowCount: 500 });
 
 		const deleted = await repository.deleteProcessedBefore({
 			olderThanDays: 7,
@@ -427,33 +452,124 @@ describe("OutboxRepository.deleteProcessedBefore", () => {
 			statuses: [OutboxStatus.PROCESSED],
 		});
 
-		expect(deleted).toBe(42);
+		expect(deleted).toBe(500);
 		expect(pool.calls).toHaveLength(1);
-		expect(normalizeSql(pool.lastCall().text)).toBe(
+		expect(normalizeSql(pool.calls[0].text)).toBe(normalizeSql(processedHotPath));
+		expect(pool.calls[0].params).toEqual([7, 500]);
+		expect(pool.calls[0].text).not.toContain("ANY(");
+	});
+
+	it("follows a short PROCESSED batch with the null processed_at fallback and returns the sum", async () => {
+		const repository = makeRepository(pool);
+		pool.enqueueResult({ rowCount: 4 });
+		pool.enqueueResult({ rowCount: 2 });
+
+		const deleted = await repository.deleteProcessedBefore({
+			olderThanDays: 7,
+			limit: 10,
+			statuses: ["PROCESSED"],
+		});
+
+		expect(deleted).toBe(6);
+		expect(pool.calls).toHaveLength(2);
+		expect(normalizeSql(pool.calls[0].text)).toBe(normalizeSql(processedHotPath));
+		expect(pool.calls[0].params).toEqual([7, 10]);
+		expect(normalizeSql(pool.calls[1].text)).toBe(normalizeSql(processedNullFallback));
+		expect(pool.calls[1].params).toEqual([7, 6]);
+	});
+
+	it("runs the null processed_at fallback with the full limit when the hot path deletes nothing", async () => {
+		const repository = makeRepository(pool);
+		pool.enqueueResult({ rowCount: null });
+		pool.enqueueResult({ rowCount: 3 });
+
+		const deleted = await repository.deleteProcessedBefore({
+			olderThanDays: 14,
+			limit: 100,
+			statuses: [OutboxStatus.PROCESSED],
+		});
+
+		expect(deleted).toBe(3);
+		expect(pool.calls).toHaveLength(2);
+		expect(pool.calls[1].params).toEqual([14, 100]);
+		expect(normalizeSql(pool.calls[1].text)).toContain(`"processed_at" IS NULL`);
+	});
+
+	it("deletes DEAD rows with a literal status so the created_at partial index can match", async () => {
+		const repository = makeRepository(pool);
+		pool.enqueueResult({ rowCount: 8 });
+
+		const deleted = await repository.deleteProcessedBefore({
+			olderThanDays: 30,
+			limit: 10,
+			statuses: [OutboxStatus.DEAD],
+		});
+
+		expect(deleted).toBe(8);
+		expect(pool.calls).toHaveLength(1);
+		expect(normalizeSql(pool.calls[0].text)).toBe(
 			normalizeSql(`
 				DELETE FROM "outbox"
 				WHERE "id" IN (
 					SELECT "id" FROM "outbox"
-					WHERE "status" = ANY($1)
-					  AND "created_at" < NOW() - make_interval(days => $2::int)
-					  AND COALESCE("processed_at", "created_at") < NOW() - make_interval(days => $2::int)
-					LIMIT $3
+					WHERE "status" = 'DEAD'
+					  AND "created_at" < NOW() - make_interval(days => $1::int)
+					  AND COALESCE("processed_at", "created_at") < NOW() - make_interval(days => $1::int)
+					ORDER BY "created_at" ASC
+					LIMIT $2
 				)
 			`),
 		);
-		expect(pool.lastCall().params).toEqual([["PROCESSED"], 7, 500]);
+		expect(pool.calls[0].params).toEqual([30, 10]);
+		expect(pool.calls[0].text).not.toContain("ANY(");
 	});
 
-	it("quotes camelCase identifiers and passes the given statuses", async () => {
+	it("quotes camelCase identifiers for the DEAD purge", async () => {
 		const repository = makeRepository(pool, "camelCase", "my_outbox");
+		pool.enqueueResult({ rowCount: 1 });
 
 		await repository.deleteProcessedBefore({ olderThanDays: 30, limit: 10, statuses: [OutboxStatus.DEAD] });
 
-		const sql = normalizeSql(pool.lastCall().text);
-		expect(sql).toContain('DELETE FROM "myOutbox" WHERE "id" IN ( SELECT "id" FROM "myOutbox"');
-		expect(sql).toContain('AND "createdAt" < NOW() - make_interval(days => $2::int)');
-		expect(sql).toContain('COALESCE("processedAt", "createdAt") < NOW() - make_interval(days => $2::int)');
-		expect(pool.lastCall().params).toEqual([["DEAD"], 30, 10]);
+		expect(normalizeSql(pool.lastCall().text)).toBe(
+			normalizeSql(`
+				DELETE FROM "myOutbox"
+				WHERE "id" IN (
+					SELECT "id" FROM "myOutbox"
+					WHERE "status" = 'DEAD'
+					  AND "createdAt" < NOW() - make_interval(days => $1::int)
+					  AND COALESCE("processedAt", "createdAt") < NOW() - make_interval(days => $1::int)
+					ORDER BY "createdAt" ASC
+					LIMIT $2
+				)
+			`),
+		);
+		expect(pool.lastCall().params).toEqual([30, 10]);
+	});
+
+	it("purges each requested status in order and sums every statement", async () => {
+		const repository = makeRepository(pool, "PascalCase");
+		pool.enqueueResult({ rowCount: 10 });
+		pool.enqueueResult({ rowCount: 1 });
+		pool.enqueueResult({ rowCount: 2 });
+
+		const deleted = await repository.deleteProcessedBefore({
+			olderThanDays: 9,
+			limit: 10,
+			statuses: [OutboxStatus.DEAD, OutboxStatus.PROCESSED],
+		});
+
+		expect(deleted).toBe(13);
+		expect(pool.calls).toHaveLength(3);
+		expect(normalizeSql(pool.calls[0].text)).toContain(`"status" = 'DEAD'`);
+		expect(normalizeSql(pool.calls[0].text)).toContain(`ORDER BY "CreatedAt" ASC`);
+		expect(pool.calls[0].params).toEqual([9, 10]);
+		expect(normalizeSql(pool.calls[1].text)).toContain(`"status" = 'PROCESSED'`);
+		expect(normalizeSql(pool.calls[1].text)).toContain(`"ProcessedAt" IS NOT NULL`);
+		expect(normalizeSql(pool.calls[1].text)).toContain(`ORDER BY "ProcessedAt" ASC`);
+		expect(pool.calls[1].params).toEqual([9, 10]);
+		expect(normalizeSql(pool.calls[2].text)).toContain(`"ProcessedAt" IS NULL`);
+		expect(normalizeSql(pool.calls[2].text)).toContain(`ORDER BY "CreatedAt" ASC`);
+		expect(pool.calls[2].params).toEqual([9, 9]);
 	});
 
 	it("does not query when no status is given", async () => {

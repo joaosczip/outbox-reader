@@ -60,7 +60,7 @@ src/
 └── cronjobs/
     ├── reprocess-failed-events.ts — re-inserts FAILED records as PENDING (or marks them DEAD at max attempts), one transaction per batch with set-based statements (requeueFailed / markManyAsDead)
     ├── check-pending-events.ts    — stale PENDING sweeper: republishes PENDING records older than PENDING_EVENTS_THRESHOLD_MINUTES via OutboxProcessor, sequential per aggregate and parallel across aggregates (concurrency = DB_POOL_SIZE) (at-least-once; consumers must be idempotent)
-    └── purge-processed-events.ts  — retention: deletes PROCESSED records older than PROCESSED_RETENTION_DAYS (and DEAD older than DEAD_RETENTION_DAYS, opt-in) in bounded batches
+    └── purge-processed-events.ts  — retention: deletes PROCESSED records older than PROCESSED_RETENTION_DAYS (and DEAD older than DEAD_RETENTION_DAYS, opt-in) in bounded batches. The PROCESSED delete uses the partial index `(processed_at) WHERE status = 'PROCESSED'`; the DEAD delete uses `(created_at) WHERE status = 'DEAD'`.
 ```
 
 ## Key Classes
