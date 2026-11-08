@@ -10,6 +10,7 @@
 		"start": "bun run --filter '@outbox-reader/core' start",
 		"reprocess-failed-events": "bun run --filter '@outbox-reader/core' reprocess-failed-events",
 		"check-pending-events": "bun run --filter '@outbox-reader/core' check-pending-events",
+		"purge-processed-events": "bun run --filter '@outbox-reader/core' purge-processed-events",
 		"schema:generate": "bun run --filter '@joaosczip/outy-cli' generate"
 	},
 	"devDependencies": {
