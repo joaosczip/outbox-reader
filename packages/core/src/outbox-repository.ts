@@ -15,6 +15,17 @@ import {
 
 export type OutboxRow = Record<string, unknown>;
 
+/**
+ * Quotes a PostgreSQL identifier (table/column name) so its case is preserved
+ * (unquoted identifiers are folded to lowercase). Embedded double quotes are escaped.
+ */
+export const quoteIdent = (identifier: string): string => `"${identifier.replace(/"/g, '""')}"`;
+
+const quoteColumnNames = (cols: OutboxColumnNames): OutboxColumnNames =>
+	Object.fromEntries(
+		Object.entries(cols).map(([key, name]) => [key, quoteIdent(name)]),
+	) as unknown as OutboxColumnNames;
+
 type UpdateOutboxRecordParams = {
 	id: string;
 	sequenceNumber: number;
@@ -36,7 +47,11 @@ type CreateOutboxRecordParams = {
 export class OutboxRepository {
 	private pool: Pool;
 	private retryConfig: RetryConfig;
+	/** Raw column names, used as keys of the rows returned by pg. */
 	private cols: OutboxColumnNames;
+	/** Quoted column names, used when building SQL. */
+	private qcols: OutboxColumnNames;
+	/** Quoted table name, used when building SQL. */
 	private tableName: string;
 
 	constructor({
@@ -53,11 +68,12 @@ export class OutboxRepository {
 		this.pool = pool;
 		this.retryConfig = retryConfig;
 		this.cols = getColumnNames(columnNaming);
-		this.tableName = applyNamingToTableName(tableName, columnNaming);
+		this.qcols = quoteColumnNames(this.cols);
+		this.tableName = quoteIdent(applyNamingToTableName(tableName, columnNaming));
 	}
 
 	async findUnprocessedById(id: string): Promise<OutboxRecord | null> {
-		const c = this.cols;
+		const c = this.qcols;
 		const query = `
 			SELECT ${c.id}, ${c.aggregateId}, ${c.aggregateType}, ${c.eventType}, ${c.payload}, ${c.sequenceNumber},
 			       ${c.createdAt}, ${c.processedAt}, ${c.status}, ${c.attempts}
@@ -71,7 +87,7 @@ export class OutboxRepository {
 
 	async findUnprocessedByIds(ids: string[]): Promise<OutboxRecord[]> {
 		if (ids.length === 0) return [];
-		const c = this.cols;
+		const c = this.qcols;
 		const query = `
 			SELECT ${c.id}, ${c.aggregateId}, ${c.aggregateType}, ${c.eventType}, ${c.payload}, ${c.sequenceNumber},
 			       ${c.createdAt}, ${c.processedAt}, ${c.status}, ${c.attempts}
@@ -100,21 +116,22 @@ export class OutboxRepository {
 		});
 	}
 
-	async findFailedEvents(limit = 100): Promise<OutboxRow[]> {
-		const c = this.cols;
+	async findFailedEvents(limit = 100): Promise<OutboxRecord[]> {
+		const c = this.qcols;
 		const query = `
 			SELECT ${c.id}, ${c.aggregateId}, ${c.aggregateType}, ${c.eventType}, ${c.payload}, ${c.sequenceNumber},
 			       ${c.createdAt}, ${c.processedAt}, ${c.status}, ${c.attempts}
 			FROM ${this.tableName}
 			WHERE ${c.status} = 'FAILED'
+			ORDER BY ${c.createdAt} ASC
 			LIMIT $1
 		`;
 		const result = await this.pool.query(query, [limit]);
-		return result.rows;
+		return result.rows.map((row: OutboxRow) => this.rowToRecord(row));
 	}
 
 	async findRecentPendingEvents(minutes = 10): Promise<OutboxRow[]> {
-		const c = this.cols;
+		const c = this.qcols;
 		const query = `
 			SELECT ${c.id}, ${c.aggregateId}, ${c.aggregateType}, ${c.eventType}, ${c.payload}, ${c.sequenceNumber},
 			       ${c.createdAt}, ${c.processedAt}, ${c.status}, ${c.attempts}
@@ -128,7 +145,7 @@ export class OutboxRepository {
 	}
 
 	async findLastProcessedEvent(): Promise<OutboxRecord | null> {
-		const c = this.cols;
+		const c = this.qcols;
 		const query = `
 			SELECT ${c.id}, ${c.aggregateId}, ${c.aggregateType}, ${c.eventType}, ${c.payload}, ${c.sequenceNumber},
 			       ${c.createdAt}, ${c.processedAt}, ${c.status}, ${c.attempts}
@@ -142,16 +159,17 @@ export class OutboxRepository {
 
 		if (!row) return null;
 
-		const createdAt = row[c.createdAt] as Date;
-		const processedAt = row[c.processedAt] as Date | null;
+		const r = this.cols;
+		const createdAt = row[r.createdAt] as Date;
+		const processedAt = row[r.processedAt] as Date | null;
 		return new OutboxRecord({
-			id: row[c.id] as string,
-			aggregateId: row[c.aggregateId] as string,
-			aggregateType: row[c.aggregateType] as string,
-			eventType: row[c.eventType] as string,
-			payload: row[c.payload],
-			sequenceNumber: row[c.sequenceNumber] as number,
-			status: row[c.status] as OutboxRecord["status"],
+			id: row[r.id] as string,
+			aggregateId: row[r.aggregateId] as string,
+			aggregateType: row[r.aggregateType] as string,
+			eventType: row[r.eventType] as string,
+			payload: row[r.payload],
+			sequenceNumber: row[r.sequenceNumber] as number,
+			status: row[r.status] as OutboxRecord["status"],
 			createdAt: createdAt?.toISOString(),
 			processedAt: processedAt?.toISOString(),
 		});
@@ -169,7 +187,7 @@ export class OutboxRepository {
 			attempts = 0,
 		} = params;
 
-		const c = this.cols;
+		const c = this.qcols;
 		const query = `
 			INSERT INTO ${this.tableName} (
 				${c.id}, ${c.aggregateId}, ${c.aggregateType}, ${c.eventType},
@@ -182,18 +200,18 @@ export class OutboxRepository {
 		const values = [id, aggregateId, aggregateType, eventType, payload, sequenceNumber, status, attempts];
 		const result = await this.pool.query(query, values);
 
-		return result.rows[0][c.id] as string;
+		return result.rows[0][this.cols.id] as string;
 	}
 
 	async delete(id: string, status: string): Promise<void> {
-		const c = this.cols;
+		const c = this.qcols;
 		const query = `DELETE FROM ${this.tableName} WHERE ${c.id} = $1 AND ${c.status} = $2`;
 		await this.pool.query(query, [id, status]);
 	}
 
-	async markAsProcessed({ id, sequenceNumber, attempts, retry }: UpdateOutboxRecordParams): Promise<void> {
-		const c = this.cols;
-		await backOff(
+	async markAsProcessed({ id, sequenceNumber, attempts, retry }: UpdateOutboxRecordParams): Promise<boolean> {
+		const c = this.qcols;
+		const result = await backOff(
 			async () => {
 				const query = `
 					UPDATE ${this.tableName}
@@ -213,11 +231,12 @@ export class OutboxRepository {
 				numOfAttempts: this.retryConfig.numOfAttempts,
 			},
 		);
+		return (result.rowCount ?? 0) > 0;
 	}
 
-	async markAsFailed({ id, attempts, retry }: Omit<UpdateOutboxRecordParams, "sequenceNumber">): Promise<void> {
-		const c = this.cols;
-		await backOff(
+	async markAsFailed({ id, attempts, retry }: Omit<UpdateOutboxRecordParams, "sequenceNumber">): Promise<boolean> {
+		const c = this.qcols;
+		const result = await backOff(
 			async () => {
 				const query = `
 					UPDATE ${this.tableName}
@@ -235,22 +254,20 @@ export class OutboxRepository {
 				numOfAttempts: this.retryConfig.numOfAttempts,
 			},
 		);
+		return (result.rowCount ?? 0) > 0;
 	}
 
 	async markManyAsFailed({ ids }: { ids: string[] }): Promise<void> {
-		const c = this.cols;
+		if (ids.length === 0) return;
+		const c = this.qcols;
 		const query = `
 			UPDATE ${this.tableName}
 			SET ${c.status} = 'FAILED',
 				${c.attempts} = ${c.attempts} + 1
-			WHERE ${c.id} = $1
+			WHERE ${c.id} = ANY($1)
 		`;
 
-		await Promise.all(
-			ids.map(async (id) => {
-				await this.pool.query(query, [id]);
-			}),
-		);
+		await this.pool.query(query, [ids]);
 	}
 
 	async onTransaction(callback: (tx: OutboxRepository) => Promise<void>): Promise<void> {

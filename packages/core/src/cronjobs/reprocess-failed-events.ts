@@ -1,5 +1,6 @@
 import { Logger } from "../logger";
 import { OutboxRepository } from "../outbox-repository";
+import type { ColumnNaming } from "../utils/column-naming";
 
 const logger = new Logger("outbox-reader:reprocess-failed-events");
 
@@ -29,24 +30,26 @@ export const run = async (repository: OutboxRepository) => {
 			await Promise.all(
 				failedEvents.map(async (event) => {
 					logger.info({
-						message: `Reprocessing failed event ${event.aggregate_id} ${event.event_type}`,
+						message: `Reprocessing failed event ${event.aggregateId} ${event.eventType}`,
 						extra: {
 							id: event.id,
-							aggregateId: event.aggregate_id,
-							eventType: event.event_type,
+							aggregateId: event.aggregateId,
+							eventType: event.eventType,
 							attempts: event.attempts,
 						},
 					});
 
-					await tx.delete(event.id, "FAILED");
+					const id = event.id as string;
+
+					await tx.delete(id, "FAILED");
 
 					await tx.create({
-						id: event.id,
-						aggregateId: event.aggregate_id,
-						aggregateType: event.aggregate_type,
-						eventType: event.event_type,
+						id,
+						aggregateId: event.aggregateId,
+						aggregateType: event.aggregateType,
+						eventType: event.eventType,
 						payload: event.payload,
-						sequenceNumber: event.sequence_number,
+						sequenceNumber: event.sequenceNumber,
 						status: "PENDING",
 						attempts: event.attempts,
 					});
@@ -55,8 +58,8 @@ export const run = async (repository: OutboxRepository) => {
 						message: "Failed event reprocessed",
 						extra: {
 							id: event.id,
-							aggregateId: event.aggregate_id,
-							eventType: event.event_type,
+							aggregateId: event.aggregateId,
+							eventType: event.eventType,
 							attempts: event.attempts,
 						},
 					});
@@ -83,8 +86,15 @@ export const run = async (repository: OutboxRepository) => {
 if (import.meta.main) {
 	const { pool } = await import("../db");
 
+	// Read naming settings directly from env (same defaults as src/config.ts);
+	// importing config.ts here would require replication-only variables.
+	const columnNaming = (process.env.COLUMN_NAMING || "snake_case") as ColumnNaming;
+	const tableName = process.env.TABLE_NAME || "outbox";
+
 	const outboxRepository = new OutboxRepository({
 		pool,
+		columnNaming,
+		tableName,
 		retryConfig: {
 			numOfAttempts: 3,
 			startingDelayInMs: 1000,

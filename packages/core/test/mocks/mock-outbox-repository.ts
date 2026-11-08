@@ -29,29 +29,31 @@ export class MockOutboxRepository {
 		id: string;
 		sequenceNumber: number;
 		attempts: number;
-	}): Promise<void> {
+	}): Promise<boolean> {
 		this.markAsProcessedCalls.push({ id, sequenceNumber, attempts });
 		const record = this.records.get(id);
 		if (record) {
 			record.status = OutboxStatus.PROCESSED;
 			record.sequenceNumber = sequenceNumber;
 		}
+		return true;
 	}
 
-	async markAsFailed({ id, attempts }: { id: string; attempts: number; retry?: unknown }): Promise<void> {
+	async markAsFailed({ id, attempts }: { id: string; attempts: number; retry?: unknown }): Promise<boolean> {
 		this.markAsFailedCalls.push({ id, attempts });
 		const record = this.records.get(id);
 		if (record) {
 			record.status = OutboxStatus.FAILED;
 			record.attempts = attempts + 1;
 		}
+		return true;
 	}
 
 	async markManyAsFailed(_params: { ids: string[] }): Promise<void> {
 		throw new Error("Not implemented in mock");
 	}
 
-	async findFailedEvents(_limit = 100): Promise<OutboxRow[]> {
+	async findFailedEvents(_limit = 100): Promise<OutboxRecord[]> {
 		throw new Error("Not implemented in mock");
 	}
 

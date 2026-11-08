@@ -1,24 +1,24 @@
 import { beforeEach, describe, expect, it, mock } from "bun:test";
 import { BATCH_SIZE, run } from "../src/cronjobs/reprocess-failed-events";
-import type { OutboxRepository, OutboxRow } from "../src/outbox-repository";
+import { OutboxRecord, OutboxStatus } from "../src/models/outbox-record";
+import type { OutboxRepository } from "../src/outbox-repository";
 
-const makeRow = (id: string): OutboxRow => ({
-	id,
-	aggregate_id: `agg-${id}`,
-	aggregate_type: "User",
-	event_type: "user.created",
-	payload: {},
-	sequence_number: 1,
-	created_at: new Date().toISOString(),
-	processed_at: null,
-	status: "FAILED",
-	attempts: 1,
-});
+const makeRow = (id: string): OutboxRecord =>
+	new OutboxRecord({
+		id,
+		aggregateId: `agg-${id}`,
+		aggregateType: "User",
+		eventType: "user.created",
+		payload: { n: id },
+		sequenceNumber: 1,
+		status: OutboxStatus.FAILED,
+		attempts: 1,
+	});
 
-const makeRows = (count: number, offset = 0): OutboxRow[] =>
+const makeRows = (count: number, offset = 0): OutboxRecord[] =>
 	Array.from({ length: count }, (_, i) => makeRow(String(i + offset)));
 
-const makeRepository = (findFailedEventsResponses: OutboxRow[][]): OutboxRepository => {
+const makeRepository = (findFailedEventsResponses: OutboxRecord[][]): OutboxRepository => {
 	let call = 0;
 	const deleteCalls: Array<[string, string]> = [];
 	const createCalls: unknown[] = [];
@@ -85,6 +85,37 @@ describe("reprocess-failed-events", () => {
 				expect(repo.delete).toHaveBeenCalledWith(row.id, "FAILED");
 				expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({ id: row.id, status: "PENDING" }));
 			}
+		});
+
+		it("re-creates every field from the mapped record (regression: snake_case keys were hardcoded)", async () => {
+			const rows = [
+				new OutboxRecord({
+					id: "camel-1",
+					aggregateId: "agg-camel",
+					aggregateType: "Order",
+					eventType: "order.placed",
+					payload: { total: 10 },
+					sequenceNumber: 42,
+					status: OutboxStatus.FAILED,
+					attempts: 3,
+				}),
+			];
+			const repo = makeRepository([rows, []]);
+
+			await run(repo);
+
+			expect(repo.delete).toHaveBeenCalledWith("camel-1", "FAILED");
+			expect(repo.create).toHaveBeenCalledTimes(1);
+			expect(repo.create).toHaveBeenCalledWith({
+				id: "camel-1",
+				aggregateId: "agg-camel",
+				aggregateType: "Order",
+				eventType: "order.placed",
+				payload: { total: 10 },
+				sequenceNumber: 42,
+				status: "PENDING",
+				attempts: 3,
+			});
 		});
 	});
 
