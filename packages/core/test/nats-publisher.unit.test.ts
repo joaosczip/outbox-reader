@@ -179,8 +179,20 @@ describe("NATSPublisher (unit)", () => {
 			const debugLogs = logger.logs.filter((l) => l.level === "debug");
 			expect(debugLogs).toHaveLength(2);
 			expect(debugLogs.map((l) => l.extra)).toEqual([
-				{ subject: `${SUBJECT_PREFIX}.A`, id: "evt-1", aggregateId: "order-1", aggregateType: "Order", sequenceNumber: 1 },
-				{ subject: `${SUBJECT_PREFIX}.B`, id: "evt-2", aggregateId: "order-2", aggregateType: "Order", sequenceNumber: 2 },
+				{
+					subject: `${SUBJECT_PREFIX}.A`,
+					id: "evt-1",
+					aggregateId: "order-1",
+					aggregateType: "Order",
+					sequenceNumber: 1,
+				},
+				{
+					subject: `${SUBJECT_PREFIX}.B`,
+					id: "evt-2",
+					aggregateId: "order-2",
+					aggregateType: "Order",
+					sequenceNumber: 2,
+				},
 			]);
 		});
 
