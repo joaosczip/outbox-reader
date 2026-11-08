@@ -64,7 +64,7 @@ src/
 
 ## Outbox Indexes
 
-All generators (SQL, Sequelize, Prisma) emit the same two partial indexes, named `idx_<table>_pending_created_at` and `idx_<table>_failed_created_at`, on `created_at` `WHERE status = 'PENDING'` / `'FAILED'`. Do not reintroduce indexes on `status`, `sequence_number` or a plain `created_at`: each one adds an index write to every processed event. The Prisma model uses `@@index(..., where: ...)`, which needs Prisma >= 7.4 with the `partialIndexes` preview feature (the generator enables it). The manual migration for existing tables is in `README.md` ("Outbox indexes").
+All generators (SQL, Sequelize, Prisma) emit four partial indexes: `idx_<table>_pending_created_at` and `idx_<table>_failed_created_at` on `created_at` `WHERE status = 'PENDING'` / `'FAILED'`, plus `idx_<table>_processed_processed_at` on `processed_at` `WHERE status = 'PROCESSED'` and `idx_<table>_dead_created_at` on `created_at` `WHERE status = 'DEAD'` so the retention purge can range-scan terminal rows. Do not reintroduce indexes on `status`, `sequence_number` or a plain `created_at`: each one adds an index write to every processed event. The Prisma model uses `@@index(..., where: ...)`, which needs Prisma >= 7.4 with the `partialIndexes` preview feature (the generator enables it). The manual migration for existing tables is in `README.md` ("Outbox indexes").
 
 ## CLI Binary
 

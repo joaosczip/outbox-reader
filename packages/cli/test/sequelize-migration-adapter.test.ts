@@ -221,13 +221,31 @@ describe("SequelizeMigrationAdapter", () => {
 
 	describe("createMigration - indexes", () => {
 		const cases = [
-			{ naming: "snake_case", table: "outbox", createdAt: "created_at", sequenceNumber: "sequence_number" },
-			{ naming: "camelCase", table: "outbox", createdAt: "createdAt", sequenceNumber: "sequenceNumber" },
-			{ naming: "PascalCase", table: "Outbox", createdAt: "CreatedAt", sequenceNumber: "SequenceNumber" },
+			{
+				naming: "snake_case",
+				table: "outbox",
+				createdAt: "created_at",
+				processedAt: "processed_at",
+				sequenceNumber: "sequence_number",
+			},
+			{
+				naming: "camelCase",
+				table: "outbox",
+				createdAt: "createdAt",
+				processedAt: "processedAt",
+				sequenceNumber: "sequenceNumber",
+			},
+			{
+				naming: "PascalCase",
+				table: "Outbox",
+				createdAt: "CreatedAt",
+				processedAt: "ProcessedAt",
+				sequenceNumber: "SequenceNumber",
+			},
 		] as const;
 
-		for (const { naming, table, createdAt, sequenceNumber } of cases) {
-			it(`adds only named partial created_at indexes for PENDING and FAILED (${naming})`, async () => {
+		for (const { naming, table, createdAt, processedAt, sequenceNumber } of cases) {
+			it(`adds partial indexes for PENDING, FAILED, PROCESSED and DEAD (${naming})`, async () => {
 				const { adapter, writtenFiles } = makeAdapter();
 
 				await adapter.createMigration({ target: "sequelize", columnNaming: naming });
@@ -245,8 +263,20 @@ describe("SequelizeMigrationAdapter", () => {
       where: { status: "FAILED" },
     });`,
 				);
+				expect(content).toContain(
+					`await queryInterface.addIndex("${table}", ["${processedAt}"], {
+      name: "idx_${table}_processed_processed_at",
+      where: { status: "PROCESSED" },
+    });`,
+				);
+				expect(content).toContain(
+					`await queryInterface.addIndex("${table}", ["${createdAt}"], {
+      name: "idx_${table}_dead_created_at",
+      where: { status: "DEAD" },
+    });`,
+				);
 				// Regression: the status, sequence_number and unfiltered created_at indexes must be gone.
-				expect(content.match(/addIndex\(/g)).toHaveLength(2);
+				expect(content.match(/addIndex\(/g)).toHaveLength(4);
 				expect(content).not.toContain('["status"]');
 				expect(content).not.toContain(`["${sequenceNumber}"]`);
 			});
@@ -260,6 +290,9 @@ describe("SequelizeMigrationAdapter", () => {
 			const { content } = writtenFiles[0];
 			expect(content).toContain('name: "idx_myOutbox_pending_created_at"');
 			expect(content).toContain('name: "idx_myOutbox_failed_created_at"');
+			expect(content).toContain('name: "idx_myOutbox_processed_processed_at"');
+			expect(content).toContain('["processedAt"]');
+			expect(content).toContain('name: "idx_myOutbox_dead_created_at"');
 		});
 	});
 
