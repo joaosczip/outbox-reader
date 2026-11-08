@@ -4,7 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Git Workflow (Mandatory)
 
-- **Never create commits** unless the user explicitly asks. The user is the only one who commits.
+- **Commits are allowed.** Group related changes into small, focused commits.
+- **Commit messages must follow [Conventional Commits](https://www.conventionalcommits.org/)**: `<type>(<optional scope>): <description>`.
+  - Types: `feat`, `fix`, `docs`, `test`, `refactor`, `perf`, `chore`, `build`, `ci`, `style`, `revert`.
+  - Scope is the affected package or area (e.g. `core`, `cli`, `client`, `replication`).
+  - Use the imperative mood, lowercase description, no trailing period (e.g. `fix(core): use record id as jetstream msgID`).
+  - Breaking changes: add `!` after the type/scope and a `BREAKING CHANGE:` footer describing the migration.
 - **Never add Claude as a co-author** in commit messages (no `Co-Authored-By: Claude` lines).
 
 ## Commands
