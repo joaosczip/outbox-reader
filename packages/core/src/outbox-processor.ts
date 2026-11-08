@@ -48,7 +48,7 @@ export class OutboxProcessor {
 				: await this.outboxRepository.findUnprocessedById(record.id as string);
 
 		if (!outbox || outbox.status === "PROCESSED") {
-			this.logger.info({
+			this.logger.debug({
 				message: `Outbox record ${record.id} already processed`,
 				extra: { recordId: record.id },
 			});
@@ -146,7 +146,7 @@ export class OutboxProcessor {
 				{} as Partial<OutboxConstructor>,
 			);
 
-			this.logger.info({
+			this.logger.debug({
 				message: "Received replication data for an outbox record",
 				extra: {
 					recordId: outboxAttributes.id,

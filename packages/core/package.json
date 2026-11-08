@@ -14,6 +14,7 @@
 		"start": "bun --watch src/app.ts",
 		"reprocess-failed-events": "bun src/cronjobs/reprocess-failed-events.ts",
 		"check-pending-events": "bun src/cronjobs/check-pending-events.ts",
+		"purge-processed-events": "bun src/cronjobs/purge-processed-events.ts",
 		"lint": "biome check src/",
 		"test": "bun test"
 	},

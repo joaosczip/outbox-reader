@@ -22,11 +22,30 @@ function toAttributes(data: Record<string, unknown>): Record<string, string | nu
 	return attrs;
 }
 
+export type LoggerOptions = {
+	/** Alternative pino destination (defaults to stdout). Mainly for tests. */
+	destination?: pino.DestinationStream;
+};
+
+type Level = "debug" | "info" | "warn" | "error";
+
+const SEVERITY: Record<Level, { number: SeverityNumber; text: string }> = {
+	debug: { number: SeverityNumber.DEBUG, text: "DEBUG" },
+	info: { number: SeverityNumber.INFO, text: "INFO" },
+	warn: { number: SeverityNumber.WARN, text: "WARN" },
+	error: { number: SeverityNumber.ERROR, text: "ERROR" },
+};
+
+/**
+ * pino logger that mirrors every enabled entry as an OpenTelemetry log record.
+ * Disabled levels (per LOG_LEVEL) are cheap no-ops: neither the pino object nor the
+ * OTel attributes (which JSON.stringify non-primitive values) are built.
+ */
 export class Logger {
 	private logger: pino.Logger;
 
-	constructor(context?: string) {
-		this.logger = pino({
+	constructor(context?: string, { destination }: LoggerOptions = {}) {
+		const options: pino.LoggerOptions = {
 			name: context,
 			level: process.env.LOG_LEVEL || "info",
 			formatters: {
@@ -36,54 +55,49 @@ export class Logger {
 			},
 			messageKey: "message",
 			timestamp: pino.stdTimeFunctions.isoTime,
-		});
+		};
+		this.logger = destination ? pino(options, destination) : pino(options);
 	}
 
-	info({ message, extra, traceId }: LogData) {
-		this.logger.info({ message, traceId, ...extra });
-		logs.getLogger(OTEL_LOGGER_NAME).emit({
-			severityNumber: SeverityNumber.INFO,
-			severityText: "INFO",
-			body: message,
-			attributes: { ...(traceId ? { traceId } : {}), ...toAttributes(extra ?? {}) },
-		});
+	isLevelEnabled(level: Level): boolean {
+		return this.logger.isLevelEnabled(level);
 	}
 
-	error({ message, extra, traceId, error }: LogData & { error: unknown }) {
-		this.logger.error({ message, traceId, ...extra, err: error });
+	debug(data: LogData) {
+		this.log("debug", data);
+	}
+
+	info(data: LogData) {
+		this.log("info", data);
+	}
+
+	warn(data: LogData) {
+		this.log("warn", data);
+	}
+
+	error({ error, ...data }: LogData & { error: unknown }) {
+		this.log("error", data, error, true);
+	}
+
+	private log(level: Level, { message, extra, traceId }: LogData, error?: unknown, withError = false) {
+		if (!this.logger.isLevelEnabled(level)) return;
+
+		this.logger[level](withError ? { message, traceId, ...extra, err: error } : { message, traceId, ...extra });
 		logs.getLogger(OTEL_LOGGER_NAME).emit({
-			severityNumber: SeverityNumber.ERROR,
-			severityText: "ERROR",
+			severityNumber: SEVERITY[level].number,
+			severityText: SEVERITY[level].text,
 			body: message,
 			attributes: {
 				...(traceId ? { traceId } : {}),
 				...toAttributes(extra ?? {}),
-				...(error instanceof Error
-					? { "error.type": error.name, "error.message": error.message }
-					: error != null
-						? { "error.raw": String(error) }
-						: {}),
+				...(withError ? errorAttributes(error) : {}),
 			},
 		});
 	}
+}
 
-	warn({ message, extra, traceId }: LogData) {
-		this.logger.warn({ message, traceId, ...extra });
-		logs.getLogger(OTEL_LOGGER_NAME).emit({
-			severityNumber: SeverityNumber.WARN,
-			severityText: "WARN",
-			body: message,
-			attributes: { ...(traceId ? { traceId } : {}), ...toAttributes(extra ?? {}) },
-		});
-	}
-
-	debug({ message, extra, traceId }: LogData) {
-		this.logger.debug({ message, traceId, ...extra });
-		logs.getLogger(OTEL_LOGGER_NAME).emit({
-			severityNumber: SeverityNumber.DEBUG,
-			severityText: "DEBUG",
-			body: message,
-			attributes: { ...(traceId ? { traceId } : {}), ...toAttributes(extra ?? {}) },
-		});
-	}
+function errorAttributes(error: unknown): Record<string, string> {
+	if (error instanceof Error) return { "error.type": error.name, "error.message": error.message };
+	if (error != null) return { "error.raw": String(error) };
+	return {};
 }

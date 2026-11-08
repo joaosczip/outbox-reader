@@ -37,6 +37,7 @@ bun run lint
 # Cronjobs (run manually or on a schedule)
 bun run reprocess-failed-events
 bun run check-pending-events
+bun run purge-processed-events
 
 # CLI tool for Prisma schema generation (via workspace root)
 bun run schema:generate
@@ -98,7 +99,7 @@ Because Postgres acks are cumulative, `app.ts` treats replication `onError` as f
 - **`OutboxProcessor`** (`packages/core/src/outbox-processor.ts`): Central orchestrator. Filters WAL changes to outbox inserts, processes them, and delegates to repository and publisher. Both `filterChanges()` and `processInserts()` are separate to allow independent testing.
 - **`OutboxRepository`** (`packages/core/src/outbox-repository.ts`): All DB interactions via a `pg.Pool`. Uses `backOff` (exponential-backoff) for `markAsProcessed`/`markAsFailed` writes. Exposes `onTransaction()` for transactional cronjob operations (uses a `Proxy` to swap the pool client transparently).
 - **`NATSPublisher`** (`packages/core/src/nats-publisher.ts`): Lazy-connects to NATS on first publish. Implements the `Publisher` interface. Uses `backOff` for retries. Publishes using `record.eventType` as the subject and `record.id` as the dedup `msgID` (unique per event, so retries of the same record are deduplicated but distinct events of one aggregate are not; a `duplicate` PubAck is logged as a warning).
-- **`startReplication`** (`packages/core/src/replication.ts`): Thin wrapper around `LogicalReplicationService`. Sets `replication=database` on the connection string via `buildReplicationConnectionString()` (preserves existing query params). Uses manual LSN acknowledgement: each LSN is acked only after `onChange` resolves; failures and service `error` events go to the optional `onError` callback.
+- **`startReplication`** (`packages/core/src/replication.ts`): Thin wrapper around `LogicalReplicationService`. Sets `replication=database` on the connection string via `buildReplicationConnectionString()` (preserves existing query params). When given `tableName` (the physical name from `applyNamingToTableName`, wired by `app.ts`), it builds the Wal2Json plugin with `buildWal2JsonOptions()` — `add-tables '*.<table>'` (name escaped by `escapeWal2JsonTableName()`), `actions 'insert'`, `include-types 'off'` — so PostgreSQL streams only outbox INSERTs (requires wal2json >= 2.0 for `actions`); without `tableName` every change is streamed. Uses manual LSN acknowledgement: each LSN is acked only after `onChange` resolves; failures and service `error` events go to the optional `onError` callback.
 
 ### Retry Pattern
 
@@ -106,8 +107,9 @@ All retry-capable operations accept a `RetryConfig` with `numOfAttempts`, `start
 
 ### Cronjobs (`packages/core/src/cronjobs/`)
 
-- **`reprocess-failed-events.ts`**: Finds all `FAILED` records, deletes them, and re-inserts as `PENDING` in a single transaction (causing WAL events to re-trigger the replication flow).
-- **`check-pending-events.ts`**: Stale `PENDING` sweeper. In batches, finds `PENDING` records older than `PENDING_EVENTS_THRESHOLD_MINUTES` (default 10) — events the main service likely lost (crash, lost in-memory retry, WAL acked but not processed) — and runs each through `OutboxProcessor.processInserts()` with the publisher from `publisher.yaml` (fresh DB read, so already-processed records are skipped). A failing record is marked `FAILED` (feeding `reprocess-failed-events`) without stopping the others. **At-least-once caveat:** NATS dedups by `record.id` only within the stream's duplicate window (default 2 min); if the original publish succeeded but marking `PROCESSED` failed, the republish creates a duplicate — consumers must be idempotent.
+- **`reprocess-failed-events.ts`**: In batches, finds `FAILED` records, deletes them, and re-inserts as `PENDING` (causing WAL events to re-trigger the replication flow); exhausted ones are marked `DEAD`. Each batch is one transaction with set-based statements: `markManyAsDead` (single `UPDATE ... FROM unnest(...)`, per-row optimistic lock on `attempts`) and `requeueFailed` (single `DELETE ... RETURNING` + `INSERT ... SELECT`, `created_at = NOW()`).
+- **`check-pending-events.ts`**: Stale `PENDING` sweeper. In batches, finds `PENDING` records older than `PENDING_EVENTS_THRESHOLD_MINUTES` (default 10) — events the main service likely lost (crash, lost in-memory retry, WAL acked but not processed) — and runs each through `OutboxProcessor.processInserts()` (via `runOrderedByKey` keyed by `aggregateId`: sequential per aggregate, parallel across aggregates, concurrency = `DB_POOL_SIZE`) with the publisher from `publisher.yaml` (fresh DB read, so already-processed records are skipped). A failing record is marked `FAILED` (feeding `reprocess-failed-events`) without stopping the others. **At-least-once caveat:** NATS dedups by `record.id` only within the stream's duplicate window (default 2 min); if the original publish succeeded but marking `PROCESSED` failed, the republish creates a duplicate — consumers must be idempotent.
+- **`purge-processed-events.ts`**: Retention purge. Deletes `PROCESSED` records whose `processed_at` is older than `PROCESSED_RETENTION_DAYS` (default 7) in bounded batches (`OutboxRepository.deleteProcessedBefore`, `DELETE ... WHERE id IN (SELECT ... LIMIT n)`, 1000 rows per batch) until a batch comes back short, keeping each statement's locks/WAL short. `DEAD` records are kept by default (they need human inspection) and purged only when `DEAD_RETENTION_DAYS` is set; their age is `COALESCE(processed_at, created_at)` since DEAD rows usually have no `processed_at`. `PENDING`/`FAILED` are never deleted (the repository rejects those statuses). Cutoffs use the DB clock.
 
 ### Outbox Record Statuses
 
@@ -132,6 +134,8 @@ Optional (validated when read; invalid values throw a descriptive error instead 
 - `TABLE_NAME`: default `outbox`
 - `PUBLISHER_CONFIG_PATH`: default `./publisher.yaml` (validated per provider by `loadPublisherConfig`)
 - `PENDING_EVENTS_THRESHOLD_MINUTES` (cronjobs): integer >= 1, default `10`
+- `PROCESSED_RETENTION_DAYS` (cronjobs): integer >= 1, default `7` — `purge-processed-events` deletes `PROCESSED` records older than this
+- `DEAD_RETENTION_DAYS` (cronjobs): integer >= 1, unset = never purge `DEAD` records (opt-in)
 
 See `.env.example` and `packages/core/src/config.ts` for all NATS and optional variables.
 

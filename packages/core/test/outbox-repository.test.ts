@@ -409,3 +409,183 @@ describe("OutboxRepository.findStalePendingEvents", () => {
 		expect(records[1].id).toBe("2");
 	});
 });
+
+describe("OutboxRepository.deleteProcessedBefore", () => {
+	let pool: MockPgPool;
+
+	beforeEach(() => {
+		pool = new MockPgPool();
+	});
+
+	it("deletes one bounded batch of terminal records older than the retention, using the DB clock", async () => {
+		const repository = makeRepository(pool);
+		pool.enqueueResult({ rowCount: 42 });
+
+		const deleted = await repository.deleteProcessedBefore({
+			olderThanDays: 7,
+			limit: 500,
+			statuses: [OutboxStatus.PROCESSED],
+		});
+
+		expect(deleted).toBe(42);
+		expect(pool.calls).toHaveLength(1);
+		expect(normalizeSql(pool.lastCall().text)).toBe(
+			normalizeSql(`
+				DELETE FROM "outbox"
+				WHERE "id" IN (
+					SELECT "id" FROM "outbox"
+					WHERE "status" = ANY($1)
+					  AND "created_at" < NOW() - make_interval(days => $2::int)
+					  AND COALESCE("processed_at", "created_at") < NOW() - make_interval(days => $2::int)
+					LIMIT $3
+				)
+			`),
+		);
+		expect(pool.lastCall().params).toEqual([["PROCESSED"], 7, 500]);
+	});
+
+	it("quotes camelCase identifiers and passes the given statuses", async () => {
+		const repository = makeRepository(pool, "camelCase", "my_outbox");
+
+		await repository.deleteProcessedBefore({ olderThanDays: 30, limit: 10, statuses: [OutboxStatus.DEAD] });
+
+		const sql = normalizeSql(pool.lastCall().text);
+		expect(sql).toContain('DELETE FROM "myOutbox" WHERE "id" IN ( SELECT "id" FROM "myOutbox"');
+		expect(sql).toContain('AND "createdAt" < NOW() - make_interval(days => $2::int)');
+		expect(sql).toContain('COALESCE("processedAt", "createdAt") < NOW() - make_interval(days => $2::int)');
+		expect(pool.lastCall().params).toEqual([["DEAD"], 30, 10]);
+	});
+
+	it("does not query when no status is given", async () => {
+		const repository = makeRepository(pool);
+
+		expect(await repository.deleteProcessedBefore({ olderThanDays: 7, limit: 100, statuses: [] })).toBe(0);
+		expect(pool.calls).toHaveLength(0);
+	});
+
+	it.each(["PENDING", "FAILED", "BOGUS"])(
+		"refuses to purge non-terminal status %s without querying",
+		async (status) => {
+			const repository = makeRepository(pool);
+
+			await expect(
+				repository.deleteProcessedBefore({ olderThanDays: 7, limit: 100, statuses: ["PROCESSED", status] }),
+			).rejects.toThrow(/only PROCESSED and DEAD/);
+			expect(pool.calls).toHaveLength(0);
+		},
+	);
+
+	it.each([
+		{ olderThanDays: 0, limit: 10 },
+		{ olderThanDays: 1.5, limit: 10 },
+		{ olderThanDays: 7, limit: 0 },
+	])("rejects invalid bounds %o without querying", async ({ olderThanDays, limit }) => {
+		const repository = makeRepository(pool);
+
+		await expect(
+			repository.deleteProcessedBefore({ olderThanDays, limit, statuses: ["PROCESSED"] }),
+		).rejects.toThrow(/positive integer/);
+		expect(pool.calls).toHaveLength(0);
+	});
+});
+
+describe("OutboxRepository.requeueFailed", () => {
+	let pool: MockPgPool;
+
+	beforeEach(() => {
+		pool = new MockPgPool();
+	});
+
+	it("moves FAILED records back to PENDING with a single DELETE ... RETURNING + INSERT ... SELECT statement", async () => {
+		const repository = makeRepository(pool);
+		pool.enqueueResult({ rows: [{ id: "a" }, { id: "b" }] });
+
+		const requeued = await repository.requeueFailed(["a", "b", "c"]);
+
+		expect(requeued).toEqual(["a", "b"]);
+		expect(pool.calls).toHaveLength(1);
+		expect(normalizeSql(pool.lastCall().text)).toBe(
+			normalizeSql(`
+				WITH moved AS (
+					DELETE FROM "outbox" WHERE "id" = ANY($1) AND "status" = 'FAILED'
+					RETURNING "id", "aggregate_id", "aggregate_type", "event_type", "payload", "sequence_number", "attempts", "created_at"
+				)
+				INSERT INTO "outbox" (
+					"id", "aggregate_id", "aggregate_type", "event_type",
+					"payload", "sequence_number", "status", "attempts",
+					"created_at"
+				)
+				SELECT moved."id", moved."aggregate_id", moved."aggregate_type", moved."event_type",
+					moved."payload", moved."sequence_number", 'PENDING', moved."attempts",
+					NOW()
+				FROM moved
+				ORDER BY moved."created_at" ASC
+				RETURNING "id"
+			`),
+		);
+		expect(pool.lastCall().params).toEqual([["a", "b", "c"]]);
+	});
+
+	it("uses the configured column naming and table name", async () => {
+		const repository = makeRepository(pool, "PascalCase");
+		pool.enqueueResult({ rows: [{ id: "a" }] });
+
+		expect(await repository.requeueFailed(["a"])).toEqual(["a"]);
+
+		const sql = normalizeSql(pool.lastCall().text);
+		expect(sql).toContain(`DELETE FROM "Outbox" WHERE "id" = ANY($1) AND "status" = 'FAILED'`);
+		expect(sql).toContain(`RETURNING "id", "AggregateId", "AggregateType", "EventType"`);
+		expect(sql).toContain(`INSERT INTO "Outbox" (`);
+		expect(sql).toContain(`ORDER BY moved."CreatedAt" ASC RETURNING "id"`);
+	});
+
+	it("does not query for an empty id list", async () => {
+		const repository = makeRepository(pool);
+
+		expect(await repository.requeueFailed([])).toEqual([]);
+		expect(pool.calls).toHaveLength(0);
+	});
+});
+
+describe("OutboxRepository.markManyAsDead", () => {
+	let pool: MockPgPool;
+
+	beforeEach(() => {
+		pool = new MockPgPool();
+	});
+
+	it("marks many records DEAD in one statement with a per-row optimistic lock on attempts", async () => {
+		const repository = makeRepository(pool, "camelCase");
+		pool.enqueueResult({ rows: [{ id: "a" }] });
+
+		const marked = await repository.markManyAsDead([
+			{ id: "a", attempts: 5 },
+			{ id: "b", attempts: 7 },
+		]);
+
+		expect(marked).toEqual(["a"]);
+		expect(pool.calls).toHaveLength(1);
+		expect(normalizeSql(pool.lastCall().text)).toBe(
+			normalizeSql(`
+				UPDATE "outbox" AS t
+				SET "status" = 'DEAD'
+				FROM unnest($1::text[], $2::int[]) AS v(id, attempts)
+				WHERE t."id" = ANY($3) AND t."id"::text = v.id AND t."attempts" = v.attempts
+					AND t."status" IN ('PENDING', 'FAILED')
+				RETURNING t."id"
+			`),
+		);
+		expect(pool.lastCall().params).toEqual([
+			["a", "b"],
+			[5, 7],
+			["a", "b"],
+		]);
+	});
+
+	it("does not query for an empty list", async () => {
+		const repository = makeRepository(pool);
+
+		expect(await repository.markManyAsDead([])).toEqual([]);
+		expect(pool.calls).toHaveLength(0);
+	});
+});

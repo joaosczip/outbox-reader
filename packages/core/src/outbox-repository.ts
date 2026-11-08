@@ -308,4 +308,123 @@ export class OutboxRepository {
 			client.release();
 		}
 	}
+
+	/**
+	 * Retention purge: deletes ONE bounded batch (at most `limit` rows) of terminal records
+	 * (PROCESSED/DEAD only) older than `olderThanDays`, and returns how many were deleted.
+	 * Callers loop until a batch deletes fewer than `limit`, which keeps each transaction and
+	 * its row locks short. The cutoff uses the database clock (no app/DB clock skew).
+	 *
+	 * Age is `COALESCE(processed_at, created_at)`: PROCESSED rows always have `processed_at`,
+	 * DEAD rows usually do not (they never published), so their creation time is used. The
+	 * extra `created_at < cutoff` predicate is redundant (`processed_at >= created_at`) but
+	 * lets the planner range-scan the existing `created_at` index instead of the whole table.
+	 */
+	async deleteProcessedBefore({
+		olderThanDays,
+		limit,
+		statuses,
+	}: {
+		olderThanDays: number;
+		limit: number;
+		statuses: readonly string[];
+	}): Promise<number> {
+		const invalid = statuses.filter((s) => !PURGEABLE_STATUSES.includes(s));
+		if (invalid.length) {
+			throw new Error(
+				`deleteProcessedBefore can purge only PROCESSED and DEAD records (got ${invalid.join(", ")})`,
+			);
+		}
+		for (const [name, value] of [
+			["olderThanDays", olderThanDays],
+			["limit", limit],
+		] as const) {
+			if (!Number.isInteger(value) || value < 1) {
+				throw new Error(`deleteProcessedBefore: ${name} must be a positive integer (got ${value})`);
+			}
+		}
+		if (statuses.length === 0) return 0;
+
+		const c = this.qcols;
+		const cutoff = "NOW() - make_interval(days => $2::int)";
+		const query = `
+			DELETE FROM ${this.tableName}
+			WHERE ${c.id} IN (
+				SELECT ${c.id} FROM ${this.tableName}
+				WHERE ${c.status} = ANY($1)
+				  AND ${c.createdAt} < ${cutoff}
+				  AND COALESCE(${c.processedAt}, ${c.createdAt}) < ${cutoff}
+				LIMIT $3
+			)
+		`;
+		const result = await this.pool.query(query, [[...statuses], olderThanDays, limit]);
+		return result.rowCount ?? 0;
+	}
+
+	/**
+	 * Set-based requeue for the reprocess cron: in ONE statement, deletes the given records that
+	 * are still FAILED and re-inserts them as PENDING (same id, attempts, payload, sequence number;
+	 * `created_at = NOW()`, `processed_at` NULL). The re-INSERT is what produces the WAL event the
+	 * replication service reacts to. Rows are inserted in their original `created_at` order so the
+	 * per-aggregate WAL order is preserved. Returns the ids actually requeued (records that are no
+	 * longer FAILED are skipped).
+	 */
+	async requeueFailed(ids: string[]): Promise<string[]> {
+		if (ids.length === 0) return [];
+		const c = this.qcols;
+		const moved = [
+			c.id,
+			c.aggregateId,
+			c.aggregateType,
+			c.eventType,
+			c.payload,
+			c.sequenceNumber,
+			c.attempts,
+			c.createdAt,
+		];
+		const m = (col: string) => `moved.${col}`;
+		const query = `
+			WITH moved AS (
+				DELETE FROM ${this.tableName} WHERE ${c.id} = ANY($1) AND ${c.status} = 'FAILED'
+				RETURNING ${moved.join(", ")}
+			)
+			INSERT INTO ${this.tableName} (
+				${c.id}, ${c.aggregateId}, ${c.aggregateType}, ${c.eventType},
+				${c.payload}, ${c.sequenceNumber}, ${c.status}, ${c.attempts},
+				${c.createdAt}
+			)
+			SELECT ${m(c.id)}, ${m(c.aggregateId)}, ${m(c.aggregateType)}, ${m(c.eventType)},
+				${m(c.payload)}, ${m(c.sequenceNumber)}, 'PENDING', ${m(c.attempts)},
+				NOW()
+			FROM moved
+			ORDER BY ${m(c.createdAt)} ASC
+			RETURNING ${c.id}
+		`;
+		const result = await this.pool.query(query, [ids]);
+		return result.rows.map((row: OutboxRow) => String(row[this.cols.id]));
+	}
+
+	/**
+	 * Set-based DEAD transition with a per-row optimistic lock on `attempts` (and PENDING/FAILED
+	 * status). Returns the ids actually marked; any input id missing from the result was a lock
+	 * miss. Ids are compared as text so it works for both UUID and text id columns, while
+	 * `id = ANY($3)` (typed by the column) keeps the primary-key index usable.
+	 */
+	async markManyAsDead(records: { id: string; attempts: number }[]): Promise<string[]> {
+		if (records.length === 0) return [];
+		const c = this.qcols;
+		const ids = records.map((r) => r.id);
+		const query = `
+			UPDATE ${this.tableName} AS t
+			SET ${c.status} = 'DEAD'
+			FROM unnest($1::text[], $2::int[]) AS v(id, attempts)
+			WHERE t.${c.id} = ANY($3) AND t.${c.id}::text = v.id AND t.${c.attempts} = v.attempts
+				AND t.${c.status} IN ('PENDING', 'FAILED')
+			RETURNING t.${c.id}
+		`;
+		const result = await this.pool.query(query, [ids, records.map((r) => r.attempts), ids]);
+		return result.rows.map((row: OutboxRow) => String(row[this.cols.id]));
+	}
 }
+
+const PURGEABLE_STATUSES: readonly string[] = ["PROCESSED", "DEAD"];
