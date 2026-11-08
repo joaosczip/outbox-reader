@@ -409,3 +409,82 @@ describe("OutboxRepository.findStalePendingEvents", () => {
 		expect(records[1].id).toBe("2");
 	});
 });
+
+describe("OutboxRepository.deleteProcessedBefore", () => {
+	let pool: MockPgPool;
+
+	beforeEach(() => {
+		pool = new MockPgPool();
+	});
+
+	it("deletes one bounded batch of terminal records older than the retention, using the DB clock", async () => {
+		const repository = makeRepository(pool);
+		pool.enqueueResult({ rowCount: 42 });
+
+		const deleted = await repository.deleteProcessedBefore({
+			olderThanDays: 7,
+			limit: 500,
+			statuses: [OutboxStatus.PROCESSED],
+		});
+
+		expect(deleted).toBe(42);
+		expect(pool.calls).toHaveLength(1);
+		expect(normalizeSql(pool.lastCall().text)).toBe(
+			normalizeSql(`
+				DELETE FROM "outbox"
+				WHERE "id" IN (
+					SELECT "id" FROM "outbox"
+					WHERE "status" = ANY($1)
+					  AND "created_at" < NOW() - make_interval(days => $2::int)
+					  AND COALESCE("processed_at", "created_at") < NOW() - make_interval(days => $2::int)
+					LIMIT $3
+				)
+			`),
+		);
+		expect(pool.lastCall().params).toEqual([["PROCESSED"], 7, 500]);
+	});
+
+	it("quotes camelCase identifiers and passes the given statuses", async () => {
+		const repository = makeRepository(pool, "camelCase", "my_outbox");
+
+		await repository.deleteProcessedBefore({ olderThanDays: 30, limit: 10, statuses: [OutboxStatus.DEAD] });
+
+		const sql = normalizeSql(pool.lastCall().text);
+		expect(sql).toContain('DELETE FROM "myOutbox" WHERE "id" IN ( SELECT "id" FROM "myOutbox"');
+		expect(sql).toContain('AND "createdAt" < NOW() - make_interval(days => $2::int)');
+		expect(sql).toContain('COALESCE("processedAt", "createdAt") < NOW() - make_interval(days => $2::int)');
+		expect(pool.lastCall().params).toEqual([["DEAD"], 30, 10]);
+	});
+
+	it("does not query when no status is given", async () => {
+		const repository = makeRepository(pool);
+
+		expect(await repository.deleteProcessedBefore({ olderThanDays: 7, limit: 100, statuses: [] })).toBe(0);
+		expect(pool.calls).toHaveLength(0);
+	});
+
+	it.each(["PENDING", "FAILED", "BOGUS"])(
+		"refuses to purge non-terminal status %s without querying",
+		async (status) => {
+			const repository = makeRepository(pool);
+
+			await expect(
+				repository.deleteProcessedBefore({ olderThanDays: 7, limit: 100, statuses: ["PROCESSED", status] }),
+			).rejects.toThrow(/only PROCESSED and DEAD/);
+			expect(pool.calls).toHaveLength(0);
+		},
+	);
+
+	it.each([
+		{ olderThanDays: 0, limit: 10 },
+		{ olderThanDays: 1.5, limit: 10 },
+		{ olderThanDays: 7, limit: 0 },
+	])("rejects invalid bounds %o without querying", async ({ olderThanDays, limit }) => {
+		const repository = makeRepository(pool);
+
+		await expect(
+			repository.deleteProcessedBefore({ olderThanDays, limit, statuses: ["PROCESSED"] }),
+		).rejects.toThrow(/positive integer/);
+		expect(pool.calls).toHaveLength(0);
+	});
+});

@@ -11,6 +11,8 @@ const MANAGED_KEYS = [
 	"TABLE_NAME",
 	"PUBLISHER_CONFIG_PATH",
 	"PENDING_EVENTS_THRESHOLD_MINUTES",
+	"PROCESSED_RETENTION_DAYS",
+	"DEAD_RETENTION_DAYS",
 	"TEST_INT_VAR",
 ];
 
@@ -190,6 +192,8 @@ describe("config", () => {
 				tableName: "outbox",
 				publisherConfigPath: "./publisher.yaml",
 				pendingThresholdMinutes: 10,
+				processedRetentionDays: 7,
+				deadRetentionDays: undefined,
 				cronRetryConfig: {
 					numOfAttempts: 3,
 					startingDelayInMs: 1000,
@@ -212,6 +216,40 @@ describe("config", () => {
 		it("throws when PENDING_EVENTS_THRESHOLD_MINUTES is below 1", () => {
 			process.env.PENDING_EVENTS_THRESHOLD_MINUTES = "0";
 			expect(() => configModule.loadCronConfig()).toThrow(/PENDING_EVENTS_THRESHOLD_MINUTES must be >= 1/);
+		});
+
+		it("reads PROCESSED_RETENTION_DAYS", () => {
+			process.env.PROCESSED_RETENTION_DAYS = "30";
+			expect(configModule.loadCronConfig().processedRetentionDays).toBe(30);
+		});
+
+		it.each([
+			["week", /PROCESSED_RETENTION_DAYS must be an integer \(got "week"\)/],
+			["1.5", /PROCESSED_RETENTION_DAYS must be an integer/],
+			["0", /PROCESSED_RETENTION_DAYS must be >= 1 \(got 0\)/],
+			["-3", /PROCESSED_RETENTION_DAYS must be >= 1/],
+		])("throws a descriptive error for PROCESSED_RETENTION_DAYS=%s", (raw, message) => {
+			process.env.PROCESSED_RETENTION_DAYS = raw;
+			expect(() => configModule.loadCronConfig()).toThrow(message);
+		});
+
+		it("leaves DEAD purging disabled when DEAD_RETENTION_DAYS is unset or empty", () => {
+			expect(configModule.loadCronConfig().deadRetentionDays).toBeUndefined();
+			process.env.DEAD_RETENTION_DAYS = "";
+			expect(configModule.loadCronConfig().deadRetentionDays).toBeUndefined();
+		});
+
+		it("reads DEAD_RETENTION_DAYS when set (opt-in)", () => {
+			process.env.DEAD_RETENTION_DAYS = "90";
+			expect(configModule.loadCronConfig().deadRetentionDays).toBe(90);
+		});
+
+		it.each([
+			["never", /DEAD_RETENTION_DAYS must be an integer \(got "never"\)/],
+			["0", /DEAD_RETENTION_DAYS must be >= 1 \(got 0\)/],
+		])("throws a descriptive error for DEAD_RETENTION_DAYS=%s", (raw, message) => {
+			process.env.DEAD_RETENTION_DAYS = raw;
+			expect(() => configModule.loadCronConfig()).toThrow(message);
 		});
 
 		it("throws when DATABASE_URL is missing", () => {

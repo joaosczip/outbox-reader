@@ -34,6 +34,18 @@ export const getIntEnvOrDefault = (key: string, defaultValue: number, { min }: I
 	return value;
 };
 
+/**
+ * Like getIntEnvOrDefault, but an unset/empty variable yields `undefined` (feature disabled)
+ * instead of a default. A set value is validated the same way.
+ */
+export const getOptionalIntEnv = (key: string, options: IntEnvOptions = {}): number | undefined => {
+	const raw = process.env[key];
+	if (raw === undefined || raw === "") {
+		return undefined;
+	}
+	return getIntEnvOrDefault(key, 0, options);
+};
+
 const COLUMN_NAMINGS: readonly ColumnNaming[] = ["snake_case", "camelCase", "PascalCase"];
 
 const getColumnNaming = (): ColumnNaming => {
@@ -103,6 +115,10 @@ export type CronConfig = {
 	tableName: string;
 	publisherConfigPath: string;
 	pendingThresholdMinutes: number;
+	/** purge-processed-events: delete PROCESSED records older than this many days. */
+	processedRetentionDays: number;
+	/** purge-processed-events: delete DEAD records older than this many days; undefined = never. */
+	deadRetentionDays: number | undefined;
 	cronRetryConfig: RetryConfig;
 };
 
@@ -113,6 +129,8 @@ export const loadCronConfig = (): CronConfig => ({
 	tableName: getTableName(),
 	publisherConfigPath: getPublisherConfigPath(),
 	pendingThresholdMinutes: getIntEnvOrDefault("PENDING_EVENTS_THRESHOLD_MINUTES", 10, { min: 1 }),
+	processedRetentionDays: getIntEnvOrDefault("PROCESSED_RETENTION_DAYS", 7, { min: 1 }),
+	deadRetentionDays: getOptionalIntEnv("DEAD_RETENTION_DAYS", { min: 1 }),
 	cronRetryConfig: {
 		numOfAttempts: 3,
 		startingDelayInMs: 1000,
