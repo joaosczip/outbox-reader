@@ -463,14 +463,17 @@ describe("OutboxRepository.deleteProcessedBefore", () => {
 		expect(pool.calls).toHaveLength(0);
 	});
 
-	it.each(["PENDING", "FAILED", "BOGUS"])("refuses to purge non-terminal status %s without querying", async (status) => {
-		const repository = makeRepository(pool);
+	it.each(["PENDING", "FAILED", "BOGUS"])(
+		"refuses to purge non-terminal status %s without querying",
+		async (status) => {
+			const repository = makeRepository(pool);
 
-		await expect(
-			repository.deleteProcessedBefore({ olderThanDays: 7, limit: 100, statuses: ["PROCESSED", status] }),
-		).rejects.toThrow(/only PROCESSED and DEAD/);
-		expect(pool.calls).toHaveLength(0);
-	});
+			await expect(
+				repository.deleteProcessedBefore({ olderThanDays: 7, limit: 100, statuses: ["PROCESSED", status] }),
+			).rejects.toThrow(/only PROCESSED and DEAD/);
+			expect(pool.calls).toHaveLength(0);
+		},
+	);
 
 	it.each([
 		{ olderThanDays: 0, limit: 10 },

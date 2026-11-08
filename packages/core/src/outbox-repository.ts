@@ -331,7 +331,9 @@ export class OutboxRepository {
 	}): Promise<number> {
 		const invalid = statuses.filter((s) => !PURGEABLE_STATUSES.includes(s));
 		if (invalid.length) {
-			throw new Error(`deleteProcessedBefore can purge only PROCESSED and DEAD records (got ${invalid.join(", ")})`);
+			throw new Error(
+				`deleteProcessedBefore can purge only PROCESSED and DEAD records (got ${invalid.join(", ")})`,
+			);
 		}
 		for (const [name, value] of [
 			["olderThanDays", olderThanDays],
