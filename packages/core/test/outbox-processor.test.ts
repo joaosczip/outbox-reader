@@ -1273,4 +1273,76 @@ describe("OutboxProcessor", () => {
 			expect(result[0].attempts).toBe(3);
 		});
 	});
+	describe("hot-path logging", () => {
+		const buildPending = (id: string, attempts = 0) =>
+			new OutboxRecord({
+				id,
+				aggregateId: "user-1",
+				aggregateType: "User",
+				eventType: "user.created",
+				payload: {},
+				status: OutboxStatus.PENDING,
+				attempts,
+			});
+
+		it("filterChanges logs each received record at debug, not info", () => {
+			const walOutput = Wal2JsonTestHelper.createMockOutput([
+				Wal2JsonTestHelper.createOutboxInsert({
+					id: "log-1",
+					aggregateId: "user-1",
+					aggregateType: "User",
+					eventType: "user.created",
+				}),
+				Wal2JsonTestHelper.createOutboxInsert({
+					id: "log-2",
+					aggregateId: "user-2",
+					aggregateType: "User",
+					eventType: "user.created",
+				}),
+			]);
+
+			const result = processor.filterChanges(walOutput);
+
+			expect(result).toHaveLength(2);
+			expect(mockLogger.logs.filter((l) => l.level === "info")).toHaveLength(0);
+			const debugLogs = mockLogger.logs.filter((l) => l.level === "debug");
+			expect(debugLogs).toHaveLength(2);
+			expect(debugLogs.map((l) => (l.extra as { recordId: string }).recordId)).toEqual(["log-1", "log-2"]);
+		});
+
+		it("does not log at info when a record is successfully processed", async () => {
+			const record = buildPending("ok-1");
+			mockRepository.addRecord(record);
+
+			await processor.processInserts({ insertedRecord: record, publisher: mockPublisher });
+
+			expect(mockRepository.markAsProcessedCalls).toHaveLength(1);
+			expect(mockLogger.logs.filter((l) => l.level === "info")).toHaveLength(0);
+		});
+
+		it("logs an already-processed skip at debug, not info", async () => {
+			const record = buildPending("gone-1");
+
+			await processor.processInserts({
+				insertedRecord: record,
+				publisher: mockPublisher,
+				prefetchedOutbox: null,
+			});
+
+			expect(mockPublisher.publishCalls).toHaveLength(0);
+			expect(mockLogger.logs.filter((l) => l.level === "info")).toHaveLength(0);
+			expect(mockLogger.logs.filter((l) => l.level === "debug")).toEqual([
+				{ level: "debug", message: "Outbox record gone-1 already processed", extra: { recordId: "gone-1" } },
+			]);
+		});
+
+		it("still logs a DEAD transition at warn", async () => {
+			const record = buildPending("dead-1", 3);
+			mockRepository.addRecord(record);
+
+			await processor.processInserts({ insertedRecord: record, publisher: mockPublisher });
+
+			expect(mockLogger.logs.filter((l) => l.level === "warn")).toHaveLength(1);
+		});
+	});
 });
