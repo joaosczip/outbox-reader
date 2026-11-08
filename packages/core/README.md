@@ -12,10 +12,18 @@ PostgreSQL WAL → replication.ts → OutboxProcessor → NATSPublisher → NATS
 
 1. `startReplication()` subscribes to a PostgreSQL logical replication slot using the Wal2Json plugin.
 2. On each WAL event, `OutboxProcessor.filterChanges()` filters for `INSERT` operations on the `outbox` table.
-3. `OutboxProcessor.processInserts()` fetches the record from DB (must be `PENDING` or `FAILED`), calls `publisher.publish()`, then marks it `PROCESSED`.
-4. On failure, marks the record `FAILED` and increments the attempt counter.
+3. `OutboxProcessor.processInserts()` fetches the record from DB (must be `PENDING` or `FAILED`). If an older sibling of the same aggregate is still `PENDING` or `FAILED`, it returns `blocked` and does not publish. Otherwise it calls `publisher.publish()` and marks the record `PROCESSED`.
+4. On a publish failure the head is retried in memory. Later siblings of that aggregate stay `PENDING` until the head is published or marked `DEAD`.
 
-Within one WAL transaction, events of the same `aggregateId` are published sequentially in commit order; different aggregates are processed in parallel (up to `DB_POOL_SIZE`).
+### Aggregate order
+
+Within one process, events of the same `aggregateId` are published in `(created_at, id)` order. A later event is not published while an older sibling is `PENDING` or `FAILED`. `PROCESSED` siblings do not block. `DEAD` is terminal and does not block: after the head is marked `DEAD`, the tail may be published. `FAILED` blocks the tail until that head is requeued and published, or becomes `DEAD`. Different aggregates stay parallel (up to `DB_POOL_SIZE`).
+
+WAL handling and the in-memory `RetryQueue` share a per-aggregate promise chain, so one process does not publish the same aggregate from both paths at once. The chain must not be re-entered from inside a running turn; successors are drained in that same turn.
+
+This is not a cross-process lock. The predecessor check runs in the database immediately before publish. The live service and the `check-pending-events` sweeper can both pass that check (a time-of-check/time-of-use race) and both publish. Delivery stays at-least-once: NATS dedups by `record.id` only inside the stream's duplicate window (default 2 minutes). Consumers must be idempotent.
+
+`created_at` is the immutable order key. Requeue copies the original `created_at` and sets `requeued_at = NOW()`. `requeued_at` is used only to decide staleness (a recently requeued row is not stale). It is not the order key and it is not the retention age.
 
 ### Health and failure behaviour
 
@@ -135,7 +143,7 @@ bun run check-pending-events
 service most likely lost: a crash, a lost in-memory retry, a WAL event acknowledged but never processed), in batches of
 100, and sends each one through the regular `OutboxProcessor` flow using the publisher configured in `publisher.yaml`
 (`PUBLISHER_CONFIG_PATH`). Each record is re-read from the DB first, so one processed in the meantime is skipped. A record
-that fails is marked `FAILED` (so `reprocess-failed-events` picks it up) and does not stop the others. It needs
+that fails is marked `FAILED` (so `reprocess-failed-events` picks it up) and does not stop other aggregates. Later events of the failed aggregate stay `PENDING` until that head is published or marked `DEAD`. A row is stale only when `created_at` is older than the threshold and `requeued_at` is null or also older than the threshold, so a recently requeued row (old `created_at`, fresh `requeued_at`) is left alone. It needs
 `DATABASE_URL` but not `REPLICATION_SLOT_NAME`; `MAX_OUTBOX_ATTEMPTS` is respected. Exits with `1` on a fatal error.
 
 > **At-least-once delivery.** NATS dedups by `record.id` only within the stream's duplicate window (default 2 minutes).

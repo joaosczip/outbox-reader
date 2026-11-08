@@ -144,6 +144,7 @@ describe("SequelizeMigrationAdapter", () => {
 			expect(content).toContain("attempts");
 			expect(content).toContain("created_at");
 			expect(content).toContain("processed_at");
+			expect(content).toContain("requeued_at");
 			expect(content).toContain("sequence_number");
 		});
 
@@ -221,13 +222,31 @@ describe("SequelizeMigrationAdapter", () => {
 
 	describe("createMigration - indexes", () => {
 		const cases = [
-			{ naming: "snake_case", table: "outbox", createdAt: "created_at", sequenceNumber: "sequence_number" },
-			{ naming: "camelCase", table: "outbox", createdAt: "createdAt", sequenceNumber: "sequenceNumber" },
-			{ naming: "PascalCase", table: "Outbox", createdAt: "CreatedAt", sequenceNumber: "SequenceNumber" },
+			{
+				naming: "snake_case",
+				table: "outbox",
+				createdAt: "created_at",
+				aggregateId: "aggregate_id",
+				sequenceNumber: "sequence_number",
+			},
+			{
+				naming: "camelCase",
+				table: "outbox",
+				createdAt: "createdAt",
+				aggregateId: "aggregateId",
+				sequenceNumber: "sequenceNumber",
+			},
+			{
+				naming: "PascalCase",
+				table: "Outbox",
+				createdAt: "CreatedAt",
+				aggregateId: "AggregateId",
+				sequenceNumber: "SequenceNumber",
+			},
 		] as const;
 
-		for (const { naming, table, createdAt, sequenceNumber } of cases) {
-			it(`adds only named partial created_at indexes for PENDING and FAILED (${naming})`, async () => {
+		for (const { naming, table, createdAt, aggregateId, sequenceNumber } of cases) {
+			it(`adds named partial created_at and aggregate-order indexes for PENDING and FAILED (${naming})`, async () => {
 				const { adapter, writtenFiles } = makeAdapter();
 
 				await adapter.createMigration({ target: "sequelize", columnNaming: naming });
@@ -245,8 +264,20 @@ describe("SequelizeMigrationAdapter", () => {
       where: { status: "FAILED" },
     });`,
 				);
+				expect(content).toContain(
+					`await queryInterface.addIndex("${table}", ["${aggregateId}", "${createdAt}", "id"], {
+      name: "idx_${table}_pending_aggregate_order",
+      where: { status: "PENDING" },
+    });`,
+				);
+				expect(content).toContain(
+					`await queryInterface.addIndex("${table}", ["${aggregateId}", "${createdAt}", "id"], {
+      name: "idx_${table}_failed_aggregate_order",
+      where: { status: "FAILED" },
+    });`,
+				);
 				// Regression: the status, sequence_number and unfiltered created_at indexes must be gone.
-				expect(content.match(/addIndex\(/g)).toHaveLength(2);
+				expect(content.match(/addIndex\(/g)).toHaveLength(4);
 				expect(content).not.toContain('["status"]');
 				expect(content).not.toContain(`["${sequenceNumber}"]`);
 			});
@@ -260,6 +291,8 @@ describe("SequelizeMigrationAdapter", () => {
 			const { content } = writtenFiles[0];
 			expect(content).toContain('name: "idx_myOutbox_pending_created_at"');
 			expect(content).toContain('name: "idx_myOutbox_failed_created_at"');
+			expect(content).toContain('name: "idx_myOutbox_pending_aggregate_order"');
+			expect(content).toContain('name: "idx_myOutbox_failed_aggregate_order"');
 		});
 	});
 

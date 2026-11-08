@@ -63,12 +63,15 @@ model OutboxRecord {
   sequenceNumber BigInt?   @map("sequence_number")
   createdAt      DateTime  @default(now()) @map("created_at")
   processedAt    DateTime? @map("processed_at")
+  requeuedAt     DateTime? @map("requeued_at")
   status         String    @default("PENDING")
   attempts       Int       @default(0)
 
   @@map("outbox")
   @@index([createdAt], map: "idx_outbox_pending_created_at", where: { status: "PENDING" })
   @@index([createdAt], map: "idx_outbox_failed_created_at", where: { status: "FAILED" })
+  @@index([aggregateId, createdAt, id], map: "idx_outbox_pending_aggregate_order", where: { status: "PENDING" })
+  @@index([aggregateId, createdAt, id], map: "idx_outbox_failed_aggregate_order", where: { status: "FAILED" })
 }
 ```
 
@@ -185,25 +188,36 @@ CREATE TABLE IF NOT EXISTS outbox (
   attempts        INTEGER NOT NULL DEFAULT 0,
   created_at      TIMESTAMP NOT NULL DEFAULT NOW(),
   processed_at    TIMESTAMP,
+  requeued_at     TIMESTAMP,
   sequence_number BIGINT
 );
 
 CREATE INDEX IF NOT EXISTS idx_outbox_pending_created_at ON outbox(created_at) WHERE status = 'PENDING';
 CREATE INDEX IF NOT EXISTS idx_outbox_failed_created_at ON outbox(created_at) WHERE status = 'FAILED';
+CREATE INDEX IF NOT EXISTS idx_outbox_pending_aggregate_order ON outbox(aggregate_id, created_at, id) WHERE status = 'PENDING';
+CREATE INDEX IF NOT EXISTS idx_outbox_failed_aggregate_order ON outbox(aggregate_id, created_at, id) WHERE status = 'FAILED';
 ```
 
 The Sequelize migration file is a standard `queryInterface.createTable` / `dropTable` module placed in the migrations directory, named `<timestamp>-<migration-name>.js`. The migrations directory is discovered from `.sequelizerc` (`migrations-path` key), falling back to `./migrations/`.
 
 ### Outbox indexes
 
-All targets (SQL, Sequelize, Prisma) create the same two partial indexes, in every column naming mode:
+All targets (SQL, Sequelize, Prisma) create the same four partial indexes, in every column naming mode:
 
 | Index | Columns | Predicate | Serves |
 | --- | --- | --- | --- |
 | `idx_<table>_pending_created_at` | `created_at` | `status = 'PENDING'` | stale `PENDING` sweeper (`check-pending-events`) |
 | `idx_<table>_failed_created_at` | `created_at` | `status = 'FAILED'` | `reprocess-failed-events` |
+| `idx_<table>_pending_aggregate_order` | `aggregate_id, created_at, id` | `status = 'PENDING'` | predecessor check for a `PENDING` sibling |
+| `idx_<table>_failed_aggregate_order` | `aggregate_id, created_at, id` | `status = 'FAILED'` | predecessor check for a `FAILED` sibling |
 
-The lookup by id (`WHERE id = ANY($1) AND status IN (...)`) uses the primary key. There is no index on `status` (low selectivity, almost every row ends `PROCESSED`), `sequence_number` (never queried) or a plain `created_at`. Each of those got a new entry on every processed event. Because `status` is part of the partial index predicates, status updates are still not HOT, but the only index entry they add is in the primary key: a row that leaves `PENDING` is not written to either partial index, and both stay small.
+`requeued_at` is a nullable timestamp set when a `FAILED` row is requeued. It is used only to decide staleness (a recently requeued row is not stale). It is not the order key (`created_at` is) and it is not the retention age.
+
+The lookup by id (`WHERE id = ANY($1) AND status IN (...)`) uses the primary key. There is no index on `status` (low selectivity, almost every row ends `PROCESSED`), `sequence_number` (never queried) or a plain `created_at`. Each of those got a new entry on every processed event. Because `status` is part of the partial index predicates, status updates are still not HOT. A row that becomes `PROCESSED` is removed from these partial indexes rather than written into them.
+
+### Aggregate order
+
+`created_at` (then `id`) is the order key for one aggregate. The two aggregate-order indexes exist so the publisher can see whether an older `PENDING` or `FAILED` sibling is still ahead. `DEAD` does not block. The check is per process, immediately before publish; two processes can still both pass it.
 
 #### Migrating an existing installation
 
@@ -212,6 +226,8 @@ Tables created with an older CLI version have `status`, `created_at` and `sequen
 ```sql
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_outbox_pending_created_at ON outbox(created_at) WHERE status = 'PENDING';
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_outbox_failed_created_at ON outbox(created_at) WHERE status = 'FAILED';
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_outbox_pending_aggregate_order ON outbox(aggregate_id, created_at, id) WHERE status = 'PENDING';
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_outbox_failed_aggregate_order ON outbox(aggregate_id, created_at, id) WHERE status = 'FAILED';
 
 -- Old index names depend on the tool that created the table:
 --   SQL target:       idx_outbox_status,  idx_outbox_created_at,     idx_outbox_sequence_number
@@ -225,7 +241,7 @@ DROP INDEX CONCURRENTLY IF EXISTS idx_outbox_sequence_number;
 
 For camelCase/PascalCase tables, quote the identifiers, e.g. `CREATE INDEX CONCURRENTLY IF NOT EXISTS "idx_Outbox_pending_created_at" ON "Outbox"("CreatedAt") WHERE "status" = 'PENDING';`. If `CREATE INDEX CONCURRENTLY` fails, it leaves an `INVALID` index. Drop it and retry.
 
-Prisma users: after running the SQL, replace the three `@@index` lines in the model with the two above, enable `partialIndexes`, generate the migration with `prisma migrate dev --create-only`, check that it matches what you already ran, and mark it applied with `prisma migrate resolve --applied <migration>`.
+Prisma users: after running the SQL, replace the old `@@index` lines in the model with the partial indexes above, enable `partialIndexes`, generate the migration with `prisma migrate dev --create-only`, check that it matches what you already ran, and mark it applied with `prisma migrate resolve --applied <migration>`. Add a nullable `requeuedAt` column when the table does not have `requeued_at` yet.
 
 A future purge job (`DELETE ... WHERE status IN ('PROCESSED','DEAD') AND processed_at < ...`) would need its own index, e.g. `(processed_at) WHERE status IN ('PROCESSED','DEAD')`. It is not generated: almost every row ends up in it, so every processed event would pay for an extra index write. Add it together with the purge job if you need one.
 

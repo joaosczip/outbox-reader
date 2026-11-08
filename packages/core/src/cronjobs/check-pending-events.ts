@@ -5,6 +5,8 @@
  * lost: process crash, in-memory RetryQueue lost, WAL event acked but never processed) and
  * pushes each one through the regular OutboxProcessor flow with the configured publisher.
  * A record that fails is marked FAILED, so it enters the FAILED → reprocess-failed-events flow.
+ * Later events of that same aggregate in the batch stay PENDING (a FAILED head blocks them).
+ * Other aggregates are not stopped. A `blocked` result is not a failure and is not marked FAILED.
  *
  * Delivery is at-least-once: NATS dedups by record id only within the stream's duplicate
  * window (default 2 minutes). If the original publish succeeded but marking PROCESSED failed,
@@ -50,6 +52,8 @@ export const run = async ({
 	// because it reached max attempts) is returned again by the next query; tracking ids keeps
 	// it from being processed twice and guarantees the loop terminates.
 	const seen = new Set<string>();
+	// Aggregates whose head failed or is blocked. Later siblings in this run stay PENDING.
+	const haltedAggregates = new Set<string>();
 
 	logger.info({
 		message: "Sweeping stale PENDING events",
@@ -66,15 +70,21 @@ export const run = async ({
 		summary.scanned += fresh.length;
 
 		// Sequential per aggregate (in query order, i.e. oldest first), parallel across aggregates.
-		// republish() never rejects, so one failing record cannot abort the batch.
+		// republish() never rejects, so one failing record cannot abort the batch. A failure or
+		// a blocked head stops only that aggregate's tail.
 		await runOrderedByKey(
 			fresh,
 			(record) => record.aggregateId,
 			async (record) => {
-				if (await republish({ record, repository, processor, publisher, logger })) {
+				if (haltedAggregates.has(record.aggregateId)) return;
+				const outcome = await republish({ record, repository, processor, publisher, logger });
+				if (outcome === "published") {
 					summary.republished++;
-				} else {
+				} else if (outcome === "failed") {
 					summary.failed++;
+					haltedAggregates.add(record.aggregateId);
+				} else {
+					haltedAggregates.add(record.aggregateId);
 				}
 			},
 			{ concurrency },
@@ -98,14 +108,21 @@ const republish = async ({
 	processor,
 	publisher,
 	logger,
-}: Omit<SweepParams, "thresholdMinutes" | "batchSize"> & { record: OutboxRecord }): Promise<boolean> => {
+}: Omit<SweepParams, "thresholdMinutes" | "batchSize"> & { record: OutboxRecord }): Promise<
+	"published" | "failed" | "blocked"
+> => {
 	const id = record.id as string;
 	const extra = { id, aggregateId: record.aggregateId, eventType: record.eventType, attempts: record.attempts };
 
 	try {
 		// prefetchedOutbox: undefined forces a fresh DB read, so a record processed meanwhile is skipped.
-		await processor.processInserts({ insertedRecord: record, publisher, prefetchedOutbox: undefined });
-		return true;
+		const outcome = await processor.processInserts({
+			insertedRecord: record,
+			publisher,
+			prefetchedOutbox: undefined,
+		});
+		if (outcome === "blocked") return "blocked";
+		return "published";
 	} catch (error) {
 		logger.error({ message: "Failed to republish stale PENDING event, marking it as FAILED", error, extra });
 	}
@@ -122,7 +139,7 @@ const republish = async ({
 	} catch (error) {
 		logger.error({ message: "Could not mark stale event as FAILED", error, extra });
 	}
-	return false;
+	return "failed";
 };
 
 if (import.meta.main) {

@@ -11,6 +11,7 @@ describe("getColumnNames", () => {
 			expect(cols.sequenceNumber).toBe("sequence_number");
 			expect(cols.createdAt).toBe("created_at");
 			expect(cols.processedAt).toBe("processed_at");
+			expect(cols.requeuedAt).toBe("requeued_at");
 		});
 
 		it("keeps unchanged columns the same", () => {
@@ -37,6 +38,7 @@ describe("getColumnNames", () => {
 			expect(cols.sequenceNumber).toBe("sequenceNumber");
 			expect(cols.createdAt).toBe("createdAt");
 			expect(cols.processedAt).toBe("processedAt");
+			expect(cols.requeuedAt).toBe("requeuedAt");
 		});
 
 		it("keeps unchanged columns the same", () => {
@@ -57,6 +59,7 @@ describe("getColumnNames", () => {
 			expect(cols.sequenceNumber).toBe("SequenceNumber");
 			expect(cols.createdAt).toBe("CreatedAt");
 			expect(cols.processedAt).toBe("ProcessedAt");
+			expect(cols.requeuedAt).toBe("RequeuedAt");
 		});
 
 		it("keeps unchanged columns the same", () => {
