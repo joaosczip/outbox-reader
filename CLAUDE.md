@@ -37,6 +37,7 @@ bun run lint
 # Cronjobs (run manually or on a schedule)
 bun run reprocess-failed-events
 bun run check-pending-events
+bun run purge-processed-events
 
 # CLI tool for Prisma schema generation (via workspace root)
 bun run schema:generate
@@ -108,6 +109,7 @@ All retry-capable operations accept a `RetryConfig` with `numOfAttempts`, `start
 
 - **`reprocess-failed-events.ts`**: Finds all `FAILED` records, deletes them, and re-inserts as `PENDING` in a single transaction (causing WAL events to re-trigger the replication flow).
 - **`check-pending-events.ts`**: Stale `PENDING` sweeper. In batches, finds `PENDING` records older than `PENDING_EVENTS_THRESHOLD_MINUTES` (default 10) — events the main service likely lost (crash, lost in-memory retry, WAL acked but not processed) — and runs each through `OutboxProcessor.processInserts()` with the publisher from `publisher.yaml` (fresh DB read, so already-processed records are skipped). A failing record is marked `FAILED` (feeding `reprocess-failed-events`) without stopping the others. **At-least-once caveat:** NATS dedups by `record.id` only within the stream's duplicate window (default 2 min); if the original publish succeeded but marking `PROCESSED` failed, the republish creates a duplicate — consumers must be idempotent.
+- **`purge-processed-events.ts`**: Retention purge. Deletes `PROCESSED` records whose `processed_at` is older than `PROCESSED_RETENTION_DAYS` (default 7) in bounded batches (`OutboxRepository.deleteProcessedBefore`, `DELETE ... WHERE id IN (SELECT ... LIMIT n)`, 1000 rows per batch) until a batch comes back short, keeping each statement's locks/WAL short. `DEAD` records are kept by default (they need human inspection) and purged only when `DEAD_RETENTION_DAYS` is set; their age is `COALESCE(processed_at, created_at)` since DEAD rows usually have no `processed_at`. `PENDING`/`FAILED` are never deleted (the repository rejects those statuses). Cutoffs use the DB clock.
 
 ### Outbox Record Statuses
 
@@ -132,6 +134,8 @@ Optional (validated when read; invalid values throw a descriptive error instead 
 - `TABLE_NAME`: default `outbox`
 - `PUBLISHER_CONFIG_PATH`: default `./publisher.yaml` (validated per provider by `loadPublisherConfig`)
 - `PENDING_EVENTS_THRESHOLD_MINUTES` (cronjobs): integer >= 1, default `10`
+- `PROCESSED_RETENTION_DAYS` (cronjobs): integer >= 1, default `7` — `purge-processed-events` deletes `PROCESSED` records older than this
+- `DEAD_RETENTION_DAYS` (cronjobs): integer >= 1, unset = never purge `DEAD` records (opt-in)
 
 See `.env.example` and `packages/core/src/config.ts` for all NATS and optional variables.
 
