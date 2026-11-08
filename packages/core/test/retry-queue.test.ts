@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, jest, spyOn } from "bun:test";
+import { retryQueueSize } from "../src/metrics";
 import { OutboxRecord, OutboxStatus } from "../src/models/outbox-record";
 import { RetryQueue } from "../src/retry-queue";
 import type { RetryConfig } from "../src/types";
@@ -191,5 +192,185 @@ describe("RetryQueue", () => {
 		await Bun.sleep(300);
 
 		expect(mockProcessor.processInsertsCalls).toHaveLength(0);
+	});
+});
+
+/** Lets pending promise continuations (processInserts resolution, finally handlers) run. */
+async function flushMicrotasks(rounds = 20): Promise<void> {
+	for (let i = 0; i < rounds; i++) await Promise.resolve();
+}
+
+type Deferred = { resolve: () => void; reject: (e: Error) => void };
+
+describe("RetryQueue under failure storms (bounded concurrency)", () => {
+	const concurrency = 3;
+	const totalRecords = 10;
+	const stormConfig: RetryConfig = { jitter: "none", maxDelayInMs: 1000, numOfAttempts: 3, startingDelayInMs: 100 };
+
+	let queue: RetryQueue;
+	let mockProcessor: MockOutboxProcessor;
+	let mockRepository: MockOutboxRepository;
+	let inFlight: number;
+	let maxInFlight: number;
+	let deferreds: Deferred[];
+	let queueSizeDelta: number;
+	let queueSizeSpy: ReturnType<typeof spyOn>;
+
+	beforeEach(() => {
+		jest.useFakeTimers();
+		inFlight = 0;
+		maxInFlight = 0;
+		deferreds = [];
+		queueSizeDelta = 0;
+		queueSizeSpy = spyOn(retryQueueSize, "add").mockImplementation((value: number) => {
+			queueSizeDelta += value;
+		});
+
+		mockProcessor = new MockOutboxProcessor();
+		mockRepository = new MockOutboxRepository();
+		mockProcessor.setCustomBehavior(
+			() =>
+				new Promise<void>((resolve, reject) => {
+					inFlight++;
+					maxInFlight = Math.max(maxInFlight, inFlight);
+					deferreds.push({
+						resolve: () => {
+							inFlight--;
+							resolve();
+						},
+						reject: (e) => {
+							inFlight--;
+							reject(e);
+						},
+					});
+				}),
+		);
+		queue = new RetryQueue({
+			processor: mockProcessor,
+			publisher: new MockPublisher(),
+			outboxRepository: mockRepository,
+			logger: new MockLogger(),
+			config: stormConfig,
+			maxAttempts: 5,
+			concurrency,
+		});
+	});
+
+	afterEach(() => {
+		queue.stop();
+		queueSizeSpy.mockRestore();
+		jest.useRealTimers();
+	});
+
+	function enqueueAll(): void {
+		for (let i = 0; i < totalRecords; i++) queue.enqueue(makeRecord(`storm-${i}`));
+	}
+
+	async function settleNext(count: number, outcome: "resolve" | "reject" = "resolve"): Promise<void> {
+		const batch = deferreds.splice(0, count);
+		for (const d of batch) outcome === "resolve" ? d.resolve() : d.reject(new Error("NATS down"));
+		await flushMicrotasks();
+	}
+
+	it("runs at most `concurrency` retries at once and eventually runs all of them, in FIFO order", async () => {
+		enqueueAll();
+		jest.advanceTimersByTime(100);
+		await flushMicrotasks();
+
+		expect(mockProcessor.processInsertsCalls).toHaveLength(concurrency);
+		expect(inFlight).toBe(concurrency);
+		expect(queue.stats()).toEqual({ scheduled: 0, queued: totalRecords - concurrency, inFlight: concurrency });
+
+		while (deferreds.length > 0) {
+			await settleNext(1);
+			expect(inFlight).toBeLessThanOrEqual(concurrency);
+		}
+
+		expect(maxInFlight).toBe(concurrency);
+		expect(mockProcessor.processInsertsCalls.map((c) => c.insertedRecord.id)).toEqual(
+			Array.from({ length: totalRecords }, (_, i) => `storm-${i}`),
+		);
+		expect(queue.stats()).toEqual({ scheduled: 0, queued: 0, inFlight: 0 });
+		expect(queueSizeDelta).toBe(0);
+	});
+
+	it("keeps the concurrency bound across failed attempts that are rescheduled", async () => {
+		enqueueAll();
+		jest.advanceTimersByTime(100);
+		await flushMicrotasks();
+
+		// Fail every first attempt; they get rescheduled with a 200ms delay.
+		while (deferreds.length > 0) await settleNext(1, "reject");
+		expect(mockProcessor.processInsertsCalls).toHaveLength(totalRecords);
+		expect(queue.stats()).toEqual({ scheduled: totalRecords, queued: 0, inFlight: 0 });
+
+		jest.advanceTimersByTime(200);
+		await flushMicrotasks();
+		expect(inFlight).toBe(concurrency);
+
+		while (deferreds.length > 0) await settleNext(1);
+
+		expect(maxInFlight).toBe(concurrency);
+		expect(mockProcessor.processInsertsCalls).toHaveLength(totalRecords * 2);
+		expect(mockRepository.markAsFailedCalls).toHaveLength(0);
+		expect(queueSizeDelta).toBe(0);
+	});
+
+	it("cleans up timer bookkeeping after timers fire (no leak)", async () => {
+		enqueueAll();
+		expect(queue.stats().scheduled).toBe(totalRecords);
+		expect(jest.getTimerCount()).toBe(totalRecords);
+
+		jest.advanceTimersByTime(100);
+		await flushMicrotasks();
+
+		expect(queue.stats().scheduled).toBe(0);
+		expect(jest.getTimerCount()).toBe(0);
+	});
+
+	it("stop() discards queued-but-not-started retries and pending timers", async () => {
+		enqueueAll();
+		jest.advanceTimersByTime(100);
+		await flushMicrotasks();
+		queue.enqueue(makeRecord("late")); // still waiting on its timer
+
+		queue.stop();
+		expect(queue.stats()).toEqual({ scheduled: 0, queued: 0, inFlight: concurrency });
+		expect(jest.getTimerCount()).toBe(0);
+
+		// In-flight retries finish (one fails); nothing new must start or be rescheduled.
+		await settleNext(concurrency - 1);
+		await settleNext(1, "reject");
+		jest.advanceTimersByTime(10_000);
+		await flushMicrotasks();
+
+		expect(mockProcessor.processInsertsCalls).toHaveLength(concurrency);
+		expect(queue.stats()).toEqual({ scheduled: 0, queued: 0, inFlight: 0 });
+		expect(jest.getTimerCount()).toBe(0);
+		expect(queueSizeDelta).toBe(0);
+	});
+
+	it("ignores records enqueued after stop()", () => {
+		queue.stop();
+		queue.enqueue(makeRecord("after-stop"));
+
+		expect(queue.stats()).toEqual({ scheduled: 0, queued: 0, inFlight: 0 });
+		expect(jest.getTimerCount()).toBe(0);
+		expect(queueSizeDelta).toBe(0);
+	});
+
+	it("rejects an invalid concurrency", () => {
+		expect(
+			() =>
+				new RetryQueue({
+					processor: mockProcessor,
+					publisher: new MockPublisher(),
+					outboxRepository: mockRepository,
+					logger: new MockLogger(),
+					config: stormConfig,
+					maxAttempts: 5,
+					concurrency: 0,
+				}),
+		).toThrow(RangeError);
 	});
 });
