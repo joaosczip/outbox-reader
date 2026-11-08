@@ -22,6 +22,17 @@ export const recordsFailed = meter.createCounter("outbox.records.failed", {
 	description: "Number of outbox records permanently marked FAILED after exhausting all retry attempts",
 });
 
+/** Number of records moved to the terminal DEAD status (max attempts reached) */
+export const recordsDead = meter.createCounter("outbox.records.dead", {
+	description: "Number of outbox records moved to the terminal DEAD status after reaching max attempts",
+});
+
+/** Number of status writes that matched no row because the record changed concurrently */
+export const optimisticLockMisses = meter.createCounter("outbox.records.optimistic_lock_miss", {
+	description:
+		"Number of outbox status updates (PROCESSED/FAILED/DEAD) that matched no row because the record changed concurrently",
+});
+
 /** Number of records skipped (already PROCESSED or max attempts reached) */
 export const recordsSkipped = meter.createCounter("outbox.records.skipped", {
 	description: "Number of outbox records skipped because they were already PROCESSED or exceeded max attempts",

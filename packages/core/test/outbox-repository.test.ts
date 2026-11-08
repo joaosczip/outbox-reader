@@ -266,6 +266,77 @@ describe("OutboxRepository", () => {
 		});
 	});
 
+	describe("markAsDead", () => {
+		it("sets the terminal DEAD status with an optimistic lock on attempts and unprocessed status", async () => {
+			const repository = makeRepository(pool, "camelCase");
+			pool.enqueueResult({ rowCount: 1 });
+
+			const updated = await repository.markAsDead({ id: "1", attempts: 5, retry: noRetry });
+
+			expect(updated).toBe(true);
+			expect(normalizeSql(pool.lastCall().text)).toBe(
+				`UPDATE "outbox" SET "status" = 'DEAD', "attempts" = "attempts" + $3 WHERE "id" = $1 AND "attempts" = $2 AND "status" IN ('PENDING', 'FAILED')`,
+			);
+			expect(pool.lastCall().params).toEqual(["1", 5, 0]);
+		});
+
+		it("increments attempts when countAttempt is true", async () => {
+			const repository = makeRepository(pool, "PascalCase");
+			pool.enqueueResult({ rowCount: 1 });
+
+			await repository.markAsDead({ id: "1", attempts: 4, retry: noRetry, countAttempt: true });
+
+			expect(normalizeSql(pool.lastCall().text)).toContain(`UPDATE "Outbox" SET "status" = 'DEAD'`);
+			expect(pool.lastCall().params).toEqual(["1", 4, 1]);
+		});
+
+		it("returns false on an optimistic-lock miss (rowCount 0)", async () => {
+			const repository = makeRepository(pool);
+			pool.enqueueResult({ rowCount: 0 });
+
+			expect(await repository.markAsDead({ id: "1", attempts: 5, retry: noRetry })).toBe(false);
+		});
+
+		it("propagates DB errors after retries are exhausted", async () => {
+			const repository = makeRepository(pool);
+			pool.query.mockImplementationOnce(async () => {
+				throw new Error("db down");
+			});
+
+			await expect(repository.markAsDead({ id: "1", attempts: 5, retry: noRetry })).rejects.toThrow("db down");
+		});
+	});
+
+	describe("unprocessed finders exclude DEAD records", () => {
+		it("findUnprocessedById only selects PENDING/FAILED", async () => {
+			const repository = makeRepository(pool);
+
+			await repository.findUnprocessedById("1");
+
+			const sql = normalizeSql(pool.lastCall().text);
+			expect(sql).toContain(`"status" IN ('PENDING', 'FAILED')`);
+			expect(sql).not.toContain("DEAD");
+		});
+
+		it("findUnprocessedByIds only selects PENDING/FAILED", async () => {
+			const repository = makeRepository(pool);
+
+			await repository.findUnprocessedByIds(["1", "2"]);
+
+			const sql = normalizeSql(pool.lastCall().text);
+			expect(sql).toContain(`"status" IN ('PENDING', 'FAILED')`);
+			expect(sql).not.toContain("DEAD");
+		});
+
+		it("findFailedEvents only selects FAILED (so DEAD records end the reprocess loop)", async () => {
+			const repository = makeRepository(pool);
+
+			await repository.findFailedEvents(10);
+
+			expect(normalizeSql(pool.lastCall().text)).toContain(`WHERE "status" = 'FAILED'`);
+		});
+	});
+
 	describe("onTransaction", () => {
 		it("runs quoted queries on the transaction client and commits", async () => {
 			const repository = makeRepository(pool, "camelCase");

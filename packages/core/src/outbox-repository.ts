@@ -236,6 +236,40 @@ export class OutboxRepository {
 		return (result.rowCount ?? 0) > 0;
 	}
 
+	/**
+	 * Moves a PENDING/FAILED record to the terminal DEAD status (optimistic lock on `attempts`).
+	 * `countAttempt` increments `attempts` when the DEAD transition follows a real (failed)
+	 * publish attempt; leave it false when the record is retired without a new attempt.
+	 * Returns false when no row matched (record changed concurrently).
+	 */
+	async markAsDead({
+		id,
+		attempts,
+		retry,
+		countAttempt = false,
+	}: Omit<UpdateOutboxRecordParams, "sequenceNumber"> & { countAttempt?: boolean }): Promise<boolean> {
+		const c = this.qcols;
+		const result = await backOff(
+			async () => {
+				const query = `
+					UPDATE ${this.tableName}
+					SET ${c.status} = 'DEAD',
+						${c.attempts} = ${c.attempts} + $3
+					WHERE ${c.id} = $1 AND ${c.attempts} = $2 AND ${c.status} IN ('PENDING', 'FAILED')
+				`;
+				return this.pool.query(query, [id, attempts, countAttempt ? 1 : 0]);
+			},
+			{
+				retry,
+				startingDelay: this.retryConfig.startingDelayInMs,
+				jitter: this.retryConfig.jitter as JitterType,
+				maxDelay: this.retryConfig.maxDelayInMs,
+				numOfAttempts: this.retryConfig.numOfAttempts,
+			},
+		);
+		return (result.rowCount ?? 0) > 0;
+	}
+
 	async markManyAsFailed({ ids }: { ids: string[] }): Promise<void> {
 		if (ids.length === 0) return;
 		const c = this.qcols;

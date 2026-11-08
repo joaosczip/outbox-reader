@@ -7,6 +7,11 @@ export class MockOutboxRepository {
 	public markAsProcessedCalls: Array<{ id: string; sequenceNumber: number; attempts: number }> = [];
 	public markAsFailedCalls: Array<{ id: string; attempts: number }> = [];
 	public findStalePendingEventsCalls: Array<{ olderThanMinutes: number; limit: number }> = [];
+	public markAsDeadCalls: Array<{ id: string; attempts: number; countAttempt?: boolean }> = [];
+	/** Return values of the optimistic-lock writes; set to false to simulate a lock miss. */
+	public markAsProcessedResult = true;
+	public markAsFailedResult = true;
+	public markAsDeadResult = true;
 
 	async findUnprocessedById(id: string): Promise<OutboxRecord | null> {
 		this.findUnprocessedByIdCalls.push(id);
@@ -31,6 +36,7 @@ export class MockOutboxRepository {
 		attempts: number;
 	}): Promise<boolean> {
 		this.markAsProcessedCalls.push({ id, sequenceNumber, attempts });
+		if (!this.markAsProcessedResult) return false;
 		const record = this.records.get(id);
 		if (record) {
 			record.status = OutboxStatus.PROCESSED;
@@ -41,10 +47,31 @@ export class MockOutboxRepository {
 
 	async markAsFailed({ id, attempts }: { id: string; attempts: number; retry?: unknown }): Promise<boolean> {
 		this.markAsFailedCalls.push({ id, attempts });
+		if (!this.markAsFailedResult) return false;
 		const record = this.records.get(id);
 		if (record) {
 			record.status = OutboxStatus.FAILED;
 			record.attempts = attempts + 1;
+		}
+		return true;
+	}
+
+	async markAsDead({
+		id,
+		attempts,
+		countAttempt,
+	}: {
+		id: string;
+		attempts: number;
+		retry?: unknown;
+		countAttempt?: boolean;
+	}): Promise<boolean> {
+		this.markAsDeadCalls.push(countAttempt === undefined ? { id, attempts } : { id, attempts, countAttempt });
+		if (!this.markAsDeadResult) return false;
+		const record = this.records.get(id);
+		if (record) {
+			record.status = OutboxStatus.DEAD;
+			if (countAttempt) record.attempts = attempts + 1;
 		}
 		return true;
 	}
@@ -112,5 +139,9 @@ export class MockOutboxRepository {
 		this.markAsProcessedCalls = [];
 		this.markAsFailedCalls = [];
 		this.findStalePendingEventsCalls = [];
+		this.markAsDeadCalls = [];
+		this.markAsProcessedResult = true;
+		this.markAsFailedResult = true;
+		this.markAsDeadResult = true;
 	}
 }

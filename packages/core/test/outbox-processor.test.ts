@@ -161,6 +161,15 @@ describe("OutboxProcessor", () => {
 				expect(mockPublisher.publishedRecords).toHaveLength(0);
 				expect(mockRepository.markAsProcessedCalls).toHaveLength(0);
 				expect(mockRepository.markAsFailedCalls).toHaveLength(0);
+				// Regression: the record used to stay PENDING forever; it must reach the terminal DEAD status
+				expect(mockRepository.markAsDeadCalls).toEqual([{ id: "max-attempts-id", attempts: 5 }]);
+				expect(mockRepository.getRecord("max-attempts-id")?.status).toBe(OutboxStatus.DEAD);
+				expect(mockLogger.logs).toContainEqual(
+					expect.objectContaining({
+						level: "warn",
+						message: "Outbox record max-attempts-id reached max attempts, marked as DEAD",
+					}),
+				);
 			});
 
 			it("should skip processing when attempts equal maximum attempts", async () => {
@@ -186,6 +195,87 @@ describe("OutboxProcessor", () => {
 				// Assert
 				expect(mockPublisher.publishedRecords).toHaveLength(0);
 				expect(mockRepository.markAsProcessedCalls).toHaveLength(0);
+				expect(mockRepository.markAsDeadCalls).toEqual([{ id: "exact-max-id", attempts: 3 }]);
+				expect(mockRepository.getRecord("exact-max-id")?.status).toBe(OutboxStatus.DEAD);
+			});
+
+			it("should log a warning and not throw when marking a max-attempts record DEAD misses the lock", async () => {
+				const record = new OutboxRecord({
+					id: "dead-miss-id",
+					aggregateId: "user-334",
+					aggregateType: "User",
+					eventType: "user.created",
+					payload: {},
+					status: OutboxStatus.FAILED,
+					attempts: 3,
+				});
+				mockRepository.addRecord(record);
+				mockRepository.markAsDeadResult = false;
+
+				await processor.processInserts({ insertedRecord: record, publisher: mockPublisher });
+
+				expect(mockPublisher.publishedRecords).toHaveLength(0);
+				expect(mockRepository.markAsDeadCalls).toHaveLength(1);
+				expect(mockRepository.getRecord("dead-miss-id")?.status).toBe(OutboxStatus.FAILED);
+				expect(mockLogger.logs).toContainEqual(
+					expect.objectContaining({
+						level: "warn",
+						message:
+							"Outbox record dead-miss-id was not marked as DEAD: optimistic-lock miss (record changed concurrently)",
+						extra: { recordId: "dead-miss-id", attempts: 3 },
+					}),
+				);
+			});
+
+			it("should not mark a record DEAD when attempts are below maximum", async () => {
+				const record = new OutboxRecord({
+					id: "below-max-not-dead",
+					aggregateId: "user-445",
+					aggregateType: "User",
+					eventType: "user.created",
+					payload: {},
+					status: OutboxStatus.FAILED,
+					attempts: 2,
+				});
+				mockRepository.addRecord(record);
+
+				await processor.processInserts({ insertedRecord: record, publisher: mockPublisher });
+
+				expect(mockRepository.markAsDeadCalls).toHaveLength(0);
+				expect(mockRepository.getRecord("below-max-not-dead")?.status).toBe(OutboxStatus.PROCESSED);
+			});
+
+			it("should log a warning and not throw on an optimistic-lock miss when marking PROCESSED", async () => {
+				const record = new OutboxRecord({
+					id: "lock-miss-id",
+					aggregateId: "user-446",
+					aggregateType: "User",
+					eventType: "user.created",
+					payload: {},
+					status: OutboxStatus.PENDING,
+					attempts: 1,
+				});
+				mockRepository.addRecord(record);
+				mockRepository.markAsProcessedResult = false;
+				mockPublisher.setSequenceNumber(99);
+
+				await expect(
+					processor.processInserts({ insertedRecord: record, publisher: mockPublisher }),
+				).resolves.toBeUndefined();
+
+				expect(mockPublisher.publishedRecords).toHaveLength(1);
+				expect(mockRepository.markAsProcessedCalls).toEqual([
+					{ id: "lock-miss-id", sequenceNumber: 99, attempts: 1 },
+				]);
+				expect(mockRepository.getRecord("lock-miss-id")?.status).toBe(OutboxStatus.PENDING);
+				expect(mockLogger.logs).toContainEqual(
+					expect.objectContaining({
+						level: "warn",
+						message:
+							"Outbox record lock-miss-id was not marked as PROCESSED: optimistic-lock miss (record changed concurrently)",
+						extra: { recordId: "lock-miss-id", attempts: 1, sequenceNumber: 99 },
+					}),
+				);
 			});
 
 			it("should allow processing when attempts are below maximum", async () => {

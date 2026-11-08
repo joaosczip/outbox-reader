@@ -111,7 +111,9 @@ All retry-capable operations accept a `RetryConfig` with `numOfAttempts`, `start
 
 ### Outbox Record Statuses
 
-`PENDING` → `PROCESSED` (success) or `FAILED` (after publish error). Max attempts check prevents infinite retries.
+`PENDING` → `PROCESSED` (success) | `FAILED` (after publish error) → `DEAD` (terminal).
+
+A record whose `attempts` reach `MAX_OUTBOX_ATTEMPTS` is marked `DEAD` (by `OutboxProcessor`, `RetryQueue` when the final retry consumes the last attempt, or the `reprocess-failed-events` cron) and is never retried or re-inserted. Status writes use an optimistic lock on `attempts`; a miss (`false` return) is logged as a warning and counted in the `outbox.records.optimistic_lock_miss` metric.
 
 ### CLI / Library Usage
 

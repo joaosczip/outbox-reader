@@ -29,6 +29,7 @@ Within one WAL transaction, events of the same `aggregateId` are published seque
 PENDING → PROCESSED   (publish succeeded)
 PENDING → FAILED      (publish failed after retries)
 FAILED  → PENDING     (reprocess cronjob re-inserts, re-triggering WAL)
+PENDING/FAILED → DEAD (terminal: attempts reached MAX_OUTBOX_ATTEMPTS; never retried)
 ```
 
 ## Environment variables
@@ -123,7 +124,7 @@ Default environment in compose (override as needed):
 ## Cronjobs
 
 ```bash
-# Re-insert FAILED records as PENDING to trigger reprocessing
+# Re-insert FAILED records as PENDING to trigger reprocessing (records at MAX_OUTBOX_ATTEMPTS are marked DEAD instead)
 bun run reprocess-failed-events
 
 # Sweep stale PENDING records (older than PENDING_EVENTS_THRESHOLD_MINUTES, default 10)

@@ -2,6 +2,8 @@ export enum OutboxStatus {
 	PENDING = "PENDING",
 	PROCESSED = "PROCESSED",
 	FAILED = "FAILED",
+	/** Terminal: the record reached max attempts and will not be retried or reprocessed. */
+	DEAD = "DEAD",
 }
 
 export type OutboxConstructor = {

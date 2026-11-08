@@ -15,6 +15,8 @@ const config: RetryConfig = {
 	startingDelayInMs: 50,
 };
 
+const maxAttempts = 5;
+
 function makeRecord(id: string, attempts = 0): OutboxRecord {
 	return new OutboxRecord({
 		id,
@@ -45,6 +47,7 @@ describe("RetryQueue", () => {
 			outboxRepository: mockRepository,
 			logger: mockLogger,
 			config,
+			maxAttempts,
 		});
 	});
 
@@ -95,6 +98,74 @@ describe("RetryQueue", () => {
 
 		expect(mockRepository.markAsFailedCalls).toHaveLength(1);
 		expect(mockRepository.markAsFailedCalls[0].id).toBe("rec-4");
+	});
+
+	it("should mark the record FAILED (not DEAD) when the next attempt stays below maxAttempts", async () => {
+		const record = makeRecord("rec-below", maxAttempts - 2);
+		mockRepository.addRecord(record);
+		mockProcessor.setError(new Error("NATS down"));
+		queue.enqueue(record);
+
+		await Bun.sleep(600);
+
+		expect(mockRepository.markAsFailedCalls).toEqual([{ id: "rec-below", attempts: maxAttempts - 2 }]);
+		expect(mockRepository.markAsDeadCalls).toHaveLength(0);
+		expect(mockRepository.getRecord("rec-below")?.status).toBe(OutboxStatus.FAILED);
+	});
+
+	it("should mark the record DEAD instead of FAILED when exhausting retries reaches maxAttempts", async () => {
+		const record = makeRecord("rec-dead", maxAttempts - 1);
+		mockRepository.addRecord(record);
+		mockProcessor.setError(new Error("NATS down"));
+		queue.enqueue(record);
+
+		await Bun.sleep(600);
+
+		expect(mockRepository.markAsFailedCalls).toHaveLength(0);
+		expect(mockRepository.markAsDeadCalls).toEqual([
+			{ id: "rec-dead", attempts: maxAttempts - 1, countAttempt: true },
+		]);
+		const stored = mockRepository.getRecord("rec-dead");
+		expect(stored?.status).toBe(OutboxStatus.DEAD);
+		expect(stored?.attempts).toBe(maxAttempts);
+	});
+
+	it("should log a warning when markAsFailed misses the optimistic lock", async () => {
+		const record = makeRecord("rec-failed-miss", 0);
+		mockRepository.markAsFailedResult = false;
+		mockProcessor.setError(new Error("NATS down"));
+		queue.enqueue(record);
+
+		await Bun.sleep(600);
+
+		expect(mockRepository.markAsFailedCalls).toHaveLength(1);
+		expect(mockLogger.logs).toContainEqual(
+			expect.objectContaining({
+				level: "warn",
+				message:
+					"Outbox record rec-failed-miss was not marked as FAILED: optimistic-lock miss (record changed concurrently)",
+				extra: { recordId: "rec-failed-miss", attempts: 0 },
+			}),
+		);
+	});
+
+	it("should log a warning when markAsDead misses the optimistic lock", async () => {
+		const record = makeRecord("rec-dead-miss", maxAttempts - 1);
+		mockRepository.markAsDeadResult = false;
+		mockProcessor.setError(new Error("NATS down"));
+		queue.enqueue(record);
+
+		await Bun.sleep(600);
+
+		expect(mockRepository.markAsDeadCalls).toHaveLength(1);
+		expect(mockLogger.logs).toContainEqual(
+			expect.objectContaining({
+				level: "warn",
+				message:
+					"Outbox record rec-dead-miss was not marked as DEAD: optimistic-lock miss (record changed concurrently)",
+				extra: { recordId: "rec-dead-miss", attempts: maxAttempts - 1 },
+			}),
+		);
 	});
 
 	it("should not call markAsFailed if a retry eventually succeeds", async () => {

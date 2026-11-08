@@ -1,6 +1,6 @@
 import type { Wal2Json } from "pg-logical-replication";
 import type { Logger } from "./logger";
-import { recordsProcessed, recordsSkipped } from "./metrics";
+import { optimisticLockMisses, recordsDead, recordsProcessed, recordsSkipped } from "./metrics";
 import { type OutboxConstructor, OutboxRecord } from "./models/outbox-record";
 import type { OutboxRepository } from "./outbox-repository";
 import type { Publisher } from "./types";
@@ -57,17 +57,14 @@ export class OutboxProcessor {
 		}
 
 		if (outbox.attempts >= this.maxAttempts) {
-			this.logger.warn({
-				message: `Outbox record ${record.id} reached max attempts`,
-				extra: { recordId: record.id, attempts: outbox.attempts },
-			});
 			recordsSkipped.add(1, { reason: "max_attempts_exceeded" });
+			await this.markAsDead(outbox);
 			return;
 		}
 
 		const sequenceNumber = await publisher.publish({ record: outbox });
 
-		await this.outboxRepository.markAsProcessed({
+		const marked = await this.outboxRepository.markAsProcessed({
 			id: outbox.id,
 			sequenceNumber,
 			attempts: outbox.attempts,
@@ -80,7 +77,47 @@ export class OutboxProcessor {
 				return true;
 			},
 		});
+
+		if (!marked) {
+			this.logger.warn({
+				message: `Outbox record ${record.id} was not marked as PROCESSED: optimistic-lock miss (record changed concurrently)`,
+				extra: { recordId: record.id, attempts: outbox.attempts, sequenceNumber },
+			});
+			optimisticLockMisses.add(1, { operation: "mark_processed", "event.type": outbox.eventType });
+			return;
+		}
+
 		recordsProcessed.add(1, { "event.type": outbox.eventType });
+	}
+
+	private async markAsDead(outbox: OutboxRecord): Promise<void> {
+		const marked = await this.outboxRepository.markAsDead({
+			id: outbox.id as string,
+			attempts: outbox.attempts,
+			retry: (e, attempts) => {
+				this.logger.error({
+					message: `Error marking outbox record ${outbox.id} as dead`,
+					extra: { recordId: outbox.id, attempts },
+					error: e,
+				});
+				return true;
+			},
+		});
+
+		if (!marked) {
+			this.logger.warn({
+				message: `Outbox record ${outbox.id} was not marked as DEAD: optimistic-lock miss (record changed concurrently)`,
+				extra: { recordId: outbox.id, attempts: outbox.attempts },
+			});
+			optimisticLockMisses.add(1, { operation: "mark_dead", "event.type": outbox.eventType });
+			return;
+		}
+
+		this.logger.warn({
+			message: `Outbox record ${outbox.id} reached max attempts, marked as DEAD`,
+			extra: { recordId: outbox.id, attempts: outbox.attempts, maxAttempts: this.maxAttempts },
+		});
+		recordsDead.add(1, { reason: "max_attempts_exceeded", "event.type": outbox.eventType });
 	}
 
 	filterChanges(log: Wal2Json.Output) {

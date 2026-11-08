@@ -1,5 +1,5 @@
 import type { Logger } from "./logger";
-import { recordsFailed, retryAttempts, retryQueueSize } from "./metrics";
+import { optimisticLockMisses, recordsDead, recordsFailed, retryAttempts, retryQueueSize } from "./metrics";
 import type { OutboxRecord } from "./models/outbox-record";
 import type { OutboxProcessor } from "./outbox-processor";
 import type { OutboxRepository } from "./outbox-repository";
@@ -21,6 +21,8 @@ export class RetryQueue {
 			outboxRepository: OutboxRepository;
 			logger: Logger;
 			config: RetryConfig;
+			/** Records whose attempts reach this value after the final retry are marked DEAD. */
+			maxAttempts: number;
 		},
 	) {}
 
@@ -62,24 +64,12 @@ export class RetryQueue {
 			const nextAttempt = attempt + 1;
 			if (nextAttempt >= this.deps.config.numOfAttempts) {
 				retryQueueSize.add(-1);
-				recordsFailed.add(1, { "event.type": record.eventType });
 				this.deps.logger.error({
 					message: `Outbox record ${record.id} exhausted all ${this.deps.config.numOfAttempts} retry attempts`,
 					extra: { recordId: record.id },
 					error,
 				});
-				await this.deps.outboxRepository.markAsFailed({
-					id: record.id as string,
-					attempts: record.attempts,
-					retry: (e: Error, attempts: number) => {
-						this.deps.logger.error({
-							message: `Error marking outbox record ${record.id} as failed`,
-							extra: { recordId: record.id, attempts },
-							error: e,
-						});
-						return true;
-					},
-				});
+				await this.markExhausted(record);
 			} else {
 				this.deps.logger.warn({
 					message: `Outbox record ${record.id} failed, scheduling retry attempt ${nextAttempt + 1}`,
@@ -87,6 +77,47 @@ export class RetryQueue {
 				});
 				this.schedule({ record, attempt: nextAttempt });
 			}
+		}
+	}
+
+	/** Marks an exhausted record FAILED, or DEAD when this failure consumes its last allowed attempt. */
+	private async markExhausted(record: OutboxRecord): Promise<void> {
+		const isDead = record.attempts + 1 >= this.deps.maxAttempts;
+		const status = isDead ? "DEAD" : "FAILED";
+		const retry = (e: Error, attempts: number) => {
+			this.deps.logger.error({
+				message: `Error marking outbox record ${record.id} as ${status.toLowerCase()}`,
+				extra: { recordId: record.id, attempts },
+				error: e,
+			});
+			return true;
+		};
+		const id = record.id as string;
+
+		const marked = isDead
+			? await this.deps.outboxRepository.markAsDead({ id, attempts: record.attempts, retry, countAttempt: true })
+			: await this.deps.outboxRepository.markAsFailed({ id, attempts: record.attempts, retry });
+
+		if (!marked) {
+			this.deps.logger.warn({
+				message: `Outbox record ${record.id} was not marked as ${status}: optimistic-lock miss (record changed concurrently)`,
+				extra: { recordId: record.id, attempts: record.attempts },
+			});
+			optimisticLockMisses.add(1, {
+				operation: isDead ? "mark_dead" : "mark_failed",
+				"event.type": record.eventType,
+			});
+			return;
+		}
+
+		if (isDead) {
+			this.deps.logger.warn({
+				message: `Outbox record ${record.id} reached max attempts, marked as DEAD`,
+				extra: { recordId: record.id, attempts: record.attempts + 1, maxAttempts: this.deps.maxAttempts },
+			});
+			recordsDead.add(1, { reason: "retries_exhausted", "event.type": record.eventType });
+		} else {
+			recordsFailed.add(1, { "event.type": record.eventType });
 		}
 	}
 

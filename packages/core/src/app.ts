@@ -140,6 +140,7 @@ process.once("SIGINT", () => shutdown("SIGINT"));
 		outboxRepository,
 		logger,
 		config: retryQueueConfig,
+		maxAttempts: maxOutboxAttempts,
 	});
 
 	const onChange = createWalChangeHandler({

@@ -87,7 +87,7 @@ The adapter is responsible for:
 
 ### `OutboxStatus`
 
-Enum with values: `PENDING`, `PROCESSED`, `FAILED`.
+Enum with values: `PENDING`, `PROCESSED`, `FAILED`, `DEAD` (terminal: max attempts reached, never retried).
 
 ## Outbox Table Schema
 

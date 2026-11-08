@@ -25,7 +25,7 @@ src/
 ├── outbox-client.ts              — OutboxClient<TTransaction>: delegates to the injected adapter
 ├── config.ts                     — package-level config (e.g. table name defaults)
 ├── models/
-│   └── outbox-status.ts          — OutboxStatus enum (PENDING, PROCESSED, FAILED)
+│   └── outbox-status.ts          — OutboxStatus enum (PENDING, PROCESSED, FAILED, DEAD)
 ├── types/
 │   ├── adapter.ts                — OutboxAdapter<TTransaction> interface
 │   ├── outbox-event.ts           — CreateOutboxEvent type

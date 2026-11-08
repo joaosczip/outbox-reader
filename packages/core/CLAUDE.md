@@ -57,14 +57,14 @@ src/
 ├── utils/
 │   └── column-naming.ts          — snake_case ↔ camelCase column mapping utilities
 └── cronjobs/
-    ├── reprocess-failed-events.ts — re-inserts FAILED records as PENDING in a transaction
+    ├── reprocess-failed-events.ts — re-inserts FAILED records as PENDING (or marks them DEAD at max attempts) in a transaction
     └── check-pending-events.ts    — stale PENDING sweeper: republishes PENDING records older than PENDING_EVENTS_THRESHOLD_MINUTES via OutboxProcessor (at-least-once; consumers must be idempotent)
 ```
 
 ## Key Classes
 
 - **`OutboxProcessor`** (`src/outbox-processor.ts`): Filters WAL changes to outbox inserts, fetches from DB, publishes, and marks as PROCESSED/FAILED. `filterChanges()` and `processInserts()` are separate for independent testing.
-- **`OutboxRepository`** (`src/outbox-repository.ts`): DB layer. Uses `backOff` for `markAsProcessed`/`markAsFailed`. Exposes `onTransaction()` for transactional cronjob operations.
+- **`OutboxRepository`** (`src/outbox-repository.ts`): DB layer. Uses `backOff` for `markAsProcessed`/`markAsFailed`/`markAsDead` (optimistic lock on `attempts`; return `false` on a miss). Exposes `onTransaction()` for transactional cronjob operations.
 - **`NATSPublisher`** (`src/nats-publisher.ts`): Lazy-connects to NATS on first publish. Uses `record.eventType` as subject, `record.id` as dedup `msgID` (unique per event; a `duplicate` PubAck is logged as a warning).
 - **`RetryQueue`** (`src/retry-queue.ts`): In-memory non-blocking retry queue. WAL stream is never blocked by individual record failures.
 
@@ -80,7 +80,7 @@ PostgreSQL WAL → replication.ts → OutboxProcessor → NATSPublisher → NATS
 
 ## Outbox Record Statuses
 
-`PENDING` → `PROCESSED` (success) or `FAILED` (after publish error). Max attempts prevents infinite retries.
+`PENDING` → `PROCESSED` (success) | `FAILED` (after publish error) → `DEAD` (terminal, `attempts >= MAX_OUTBOX_ATTEMPTS`; never retried or re-inserted by the reprocess cron). Optimistic-lock misses on status writes are logged as warnings and counted (`outbox.records.optimistic_lock_miss`).
 
 ## Test Structure
 
