@@ -1,5 +1,4 @@
 import { type OutboxRecord, OutboxStatus } from "../../src/models/outbox-record";
-import type { OutboxRow } from "../../src/outbox-repository";
 
 export class MockOutboxRepository {
 	private records: Map<string, OutboxRecord> = new Map();
@@ -7,6 +6,7 @@ export class MockOutboxRepository {
 	public findUnprocessedByIdsCalls: string[][] = [];
 	public markAsProcessedCalls: Array<{ id: string; sequenceNumber: number; attempts: number }> = [];
 	public markAsFailedCalls: Array<{ id: string; attempts: number }> = [];
+	public findStalePendingEventsCalls: Array<{ olderThanMinutes: number; limit: number }> = [];
 
 	async findUnprocessedById(id: string): Promise<OutboxRecord | null> {
 		this.findUnprocessedByIdCalls.push(id);
@@ -57,12 +57,22 @@ export class MockOutboxRepository {
 		throw new Error("Not implemented in mock");
 	}
 
-	async findRecentPendingEvents(_minutes?: number): Promise<OutboxRow[]> {
-		throw new Error("Not implemented in mock");
-	}
-
-	async findLastProcessedEvent(): Promise<OutboxRecord | null> {
-		throw new Error("Not implemented in mock");
+	/**
+	 * Simulates the DB query: PENDING records only, oldest first, capped at `limit`.
+	 * Staleness is not simulated (every PENDING record added to the mock counts as stale).
+	 */
+	async findStalePendingEvents({
+		olderThanMinutes,
+		limit,
+	}: {
+		olderThanMinutes: number;
+		limit: number;
+	}): Promise<OutboxRecord[]> {
+		this.findStalePendingEventsCalls.push({ olderThanMinutes, limit });
+		return [...this.records.values()]
+			.filter((record) => record.status === OutboxStatus.PENDING)
+			.sort((a, b) => (a.createdAt?.getTime() ?? 0) - (b.createdAt?.getTime() ?? 0))
+			.slice(0, limit);
 	}
 
 	async create(_params: {
@@ -101,5 +111,6 @@ export class MockOutboxRepository {
 		this.findUnprocessedByIdsCalls = [];
 		this.markAsProcessedCalls = [];
 		this.markAsFailedCalls = [];
+		this.findStalePendingEventsCalls = [];
 	}
 }

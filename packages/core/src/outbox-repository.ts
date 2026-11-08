@@ -1,6 +1,5 @@
 import { createId } from "@paralleldrive/cuid2";
 import { backOff } from "exponential-backoff";
-import { DateTime } from "luxon";
 import type { Pool } from "pg";
 
 import type { JitterType } from "exponential-backoff/dist/options";
@@ -130,49 +129,29 @@ export class OutboxRepository {
 		return result.rows.map((row: OutboxRow) => this.rowToRecord(row));
 	}
 
-	async findRecentPendingEvents(minutes = 10): Promise<OutboxRow[]> {
+	/**
+	 * PENDING records created more than `olderThanMinutes` ago (oldest first), i.e. events
+	 * the main service most likely lost (crash, lost in-memory retry, acked-but-unprocessed WAL).
+	 * The cutoff is computed by the database clock to avoid app/DB clock skew.
+	 */
+	async findStalePendingEvents({
+		olderThanMinutes,
+		limit,
+	}: {
+		olderThanMinutes: number;
+		limit: number;
+	}): Promise<OutboxRecord[]> {
 		const c = this.qcols;
 		const query = `
 			SELECT ${c.id}, ${c.aggregateId}, ${c.aggregateType}, ${c.eventType}, ${c.payload}, ${c.sequenceNumber},
 			       ${c.createdAt}, ${c.processedAt}, ${c.status}, ${c.attempts}
 			FROM ${this.tableName}
-			WHERE ${c.createdAt} >= $1 AND ${c.status} = 'PENDING'
+			WHERE ${c.status} = 'PENDING' AND ${c.createdAt} < NOW() - make_interval(mins => $1::int)
 			ORDER BY ${c.createdAt} ASC
+			LIMIT $2
 		`;
-		const minDate = DateTime.now().minus({ minutes }).toJSDate();
-		const result = await this.pool.query(query, [minDate]);
-		return result.rows;
-	}
-
-	async findLastProcessedEvent(): Promise<OutboxRecord | null> {
-		const c = this.qcols;
-		const query = `
-			SELECT ${c.id}, ${c.aggregateId}, ${c.aggregateType}, ${c.eventType}, ${c.payload}, ${c.sequenceNumber},
-			       ${c.createdAt}, ${c.processedAt}, ${c.status}, ${c.attempts}
-			FROM ${this.tableName}
-			WHERE ${c.status} = 'PROCESSED'
-			ORDER BY ${c.sequenceNumber} DESC
-			LIMIT 1
-		`;
-		const result = await this.pool.query(query);
-		const row: OutboxRow | undefined = result.rows[0];
-
-		if (!row) return null;
-
-		const r = this.cols;
-		const createdAt = row[r.createdAt] as Date;
-		const processedAt = row[r.processedAt] as Date | null;
-		return new OutboxRecord({
-			id: row[r.id] as string,
-			aggregateId: row[r.aggregateId] as string,
-			aggregateType: row[r.aggregateType] as string,
-			eventType: row[r.eventType] as string,
-			payload: row[r.payload],
-			sequenceNumber: row[r.sequenceNumber] as number,
-			status: row[r.status] as OutboxRecord["status"],
-			createdAt: createdAt?.toISOString(),
-			processedAt: processedAt?.toISOString(),
-		});
+		const result = await this.pool.query(query, [olderThanMinutes, limit]);
+		return result.rows.map((row: OutboxRow) => this.rowToRecord(row));
 	}
 
 	async create(params: CreateOutboxRecordParams): Promise<string> {

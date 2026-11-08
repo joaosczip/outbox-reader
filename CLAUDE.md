@@ -101,7 +101,7 @@ All retry-capable operations accept a `RetryConfig` with `numOfAttempts`, `start
 ### Cronjobs (`packages/core/src/cronjobs/`)
 
 - **`reprocess-failed-events.ts`**: Finds all `FAILED` records, deletes them, and re-inserts as `PENDING` in a single transaction (causing WAL events to re-trigger the replication flow).
-- **`check-pending-events.ts`**: Monitors `PENDING` events older than a configurable window.
+- **`check-pending-events.ts`**: Stale `PENDING` sweeper. In batches, finds `PENDING` records older than `PENDING_EVENTS_THRESHOLD_MINUTES` (default 10) — events the main service likely lost (crash, lost in-memory retry, WAL acked but not processed) — and runs each through `OutboxProcessor.processInserts()` with the publisher from `publisher.yaml` (fresh DB read, so already-processed records are skipped). A failing record is marked `FAILED` (feeding `reprocess-failed-events`) without stopping the others. **At-least-once caveat:** NATS dedups by `record.id` only within the stream's duplicate window (default 2 min); if the original publish succeeded but marking `PROCESSED` failed, the republish creates a duplicate — consumers must be idempotent.
 
 ### Outbox Record Statuses
 

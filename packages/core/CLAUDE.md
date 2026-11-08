@@ -57,7 +57,7 @@ src/
 │   └── column-naming.ts          — snake_case ↔ camelCase column mapping utilities
 └── cronjobs/
     ├── reprocess-failed-events.ts — re-inserts FAILED records as PENDING in a transaction
-    └── check-pending-events.ts    — monitors PENDING events older than a configurable window
+    └── check-pending-events.ts    — stale PENDING sweeper: republishes PENDING records older than PENDING_EVENTS_THRESHOLD_MINUTES via OutboxProcessor (at-least-once; consumers must be idempotent)
 ```
 
 ## Key Classes

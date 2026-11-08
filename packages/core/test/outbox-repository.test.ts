@@ -97,26 +97,6 @@ describe("OutboxRepository", () => {
 			expect(pool.lastCall().params).toEqual(["1", "FAILED"]);
 		});
 
-		it("quotes identifiers in findRecentPendingEvents", async () => {
-			const repository = makeRepository(pool, "camelCase");
-
-			await repository.findRecentPendingEvents(5);
-
-			const sql = normalizeSql(pool.lastCall().text);
-			expect(sql).toContain(`WHERE "createdAt" >= $1 AND "status" = 'PENDING'`);
-			expect(sql).toContain('ORDER BY "createdAt" ASC');
-		});
-
-		it("quotes identifiers in findLastProcessedEvent", async () => {
-			const repository = makeRepository(pool, "camelCase");
-
-			await repository.findLastProcessedEvent();
-
-			const sql = normalizeSql(pool.lastCall().text);
-			expect(sql).toContain('FROM "outbox"');
-			expect(sql).toContain('ORDER BY "sequenceNumber" DESC');
-		});
-
 		it("keeps snake_case identifiers working when quoted", async () => {
 			const repository = makeRepository(pool);
 
@@ -298,5 +278,63 @@ describe("OutboxRepository", () => {
 			expect(texts).toEqual(["BEGIN", 'DELETE FROM "outbox" WHERE "id" = $1 AND "status" = $2', "COMMIT"]);
 			expect(pool.release).toHaveBeenCalledTimes(1);
 		});
+	});
+});
+
+describe("OutboxRepository.findStalePendingEvents", () => {
+	let pool: MockPgPool;
+
+	beforeEach(() => {
+		pool = new MockPgPool();
+	});
+
+	it("selects PENDING records OLDER than the threshold (regression: used to select recent ones)", async () => {
+		const repository = makeRepository(pool, "camelCase");
+
+		await repository.findStalePendingEvents({ olderThanMinutes: 15, limit: 50 });
+
+		const sql = normalizeSql(pool.lastCall().text);
+		expect(sql).toContain('FROM "outbox"');
+		expect(sql).toContain(`WHERE "status" = 'PENDING' AND "createdAt" < NOW() - make_interval(mins => $1::int)`);
+		expect(sql).not.toContain(">=");
+		expect(sql).toContain('ORDER BY "createdAt" ASC LIMIT $2');
+		expect(pool.lastCall().params).toEqual([15, 50]);
+	});
+
+	it("uses snake_case quoted identifiers by default", async () => {
+		const repository = makeRepository(pool);
+
+		await repository.findStalePendingEvents({ olderThanMinutes: 10, limit: 100 });
+
+		const sql = normalizeSql(pool.lastCall().text);
+		expect(sql).toContain(`WHERE "status" = 'PENDING' AND "created_at" < NOW() - make_interval(mins => $1::int)`);
+		expect(sql).toContain('ORDER BY "created_at" ASC LIMIT $2');
+	});
+
+	it("maps rows to OutboxRecord instances", async () => {
+		const repository = makeRepository(pool, "camelCase");
+		pool.enqueueResult({
+			rows: [
+				{ ...camelRow("1"), status: "PENDING" },
+				{ ...camelRow("2"), status: "PENDING" },
+			],
+		});
+
+		const records = await repository.findStalePendingEvents({ olderThanMinutes: 10, limit: 100 });
+
+		expect(records).toHaveLength(2);
+		expect(records[0]).toBeInstanceOf(OutboxRecord);
+		expect(records[0]).toMatchObject({
+			id: "1",
+			aggregateId: "agg-1",
+			aggregateType: "User",
+			eventType: "user.created",
+			payload: { foo: "bar" },
+			sequenceNumber: 7,
+			status: OutboxStatus.PENDING,
+			attempts: 2,
+		});
+		expect(records[0].createdAt?.toISOString()).toBe("2026-01-01T00:00:00.000Z");
+		expect(records[1].id).toBe("2");
 	});
 });

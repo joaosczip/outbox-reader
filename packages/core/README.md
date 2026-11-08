@@ -118,9 +118,20 @@ Default environment in compose (override as needed):
 # Re-insert FAILED records as PENDING to trigger reprocessing
 bun run reprocess-failed-events
 
-# Alert on PENDING records older than the configured window
+# Sweep stale PENDING records (older than PENDING_EVENTS_THRESHOLD_MINUTES, default 10)
 bun run check-pending-events
 ```
+
+`check-pending-events` is a **stale PENDING sweeper**. It finds `PENDING` records older than the threshold (events the
+service most likely lost: a crash, a lost in-memory retry, a WAL event acknowledged but never processed), in batches of
+100, and sends each one through the regular `OutboxProcessor` flow using the publisher configured in `publisher.yaml`
+(`PUBLISHER_CONFIG_PATH`). Each record is re-read from the DB first, so one processed in the meantime is skipped. A record
+that fails is marked `FAILED` (so `reprocess-failed-events` picks it up) and does not stop the others. It needs
+`DATABASE_URL` but not `REPLICATION_SLOT_NAME`; `MAX_OUTBOX_ATTEMPTS` is respected. Exits with `1` on a fatal error.
+
+> **At-least-once delivery.** NATS dedups by `record.id` only within the stream's duplicate window (default 2 minutes).
+> If the original publish actually succeeded but marking the record `PROCESSED` failed, the sweeper republishes it
+> outside that window and consumers receive a duplicate. Consumers must be idempotent.
 
 ## Health check
 
