@@ -23,20 +23,22 @@ describe("SqlMigrationAdapter", () => {
 
 			const sql = written.join("");
 			expect(sql).toContain('CREATE EXTENSION IF NOT EXISTS "pg_uuidv7"');
-			expect(sql).toContain("CREATE TABLE IF NOT EXISTS outbox");
-			expect(sql).toContain("id              UUID PRIMARY KEY DEFAULT uuid_generate_v7()");
-			expect(sql).toContain("aggregate_id    VARCHAR(50) NOT NULL");
-			expect(sql).toContain("aggregate_type  VARCHAR(50) NOT NULL");
-			expect(sql).toContain("event_type      VARCHAR(50) NOT NULL");
-			expect(sql).toContain("payload         JSONB NOT NULL");
-			expect(sql).toContain("status          TEXT NOT NULL DEFAULT 'PENDING'");
-			expect(sql).toContain("attempts        INTEGER NOT NULL DEFAULT 0");
-			expect(sql).toContain("created_at      TIMESTAMP NOT NULL DEFAULT NOW()");
-			expect(sql).toContain("processed_at    TIMESTAMP");
-			expect(sql).toContain("sequence_number BIGINT");
-			expect(sql).toContain("CREATE INDEX IF NOT EXISTS idx_outbox_status ON outbox(status)");
-			expect(sql).toContain("CREATE INDEX IF NOT EXISTS idx_outbox_created_at ON outbox(created_at)");
-			expect(sql).toContain("CREATE INDEX IF NOT EXISTS idx_outbox_sequence_number ON outbox(sequence_number)");
+			expect(sql).toContain('CREATE TABLE IF NOT EXISTS "outbox" (');
+			expect(sql).toContain('"id" UUID PRIMARY KEY DEFAULT uuid_generate_v7()');
+			expect(sql).toContain('"aggregate_id" VARCHAR(50) NOT NULL');
+			expect(sql).toContain('"aggregate_type" VARCHAR(50) NOT NULL');
+			expect(sql).toContain('"event_type" VARCHAR(50) NOT NULL');
+			expect(sql).toContain('"payload" JSONB NOT NULL');
+			expect(sql).toContain(`"status" TEXT NOT NULL DEFAULT 'PENDING'`);
+			expect(sql).toContain('"attempts" INTEGER NOT NULL DEFAULT 0');
+			expect(sql).toContain('"created_at" TIMESTAMP NOT NULL DEFAULT NOW()');
+			expect(sql).toContain('"processed_at" TIMESTAMP');
+			expect(sql).toContain('"sequence_number" BIGINT');
+			expect(sql).toContain('CREATE INDEX IF NOT EXISTS "idx_outbox_status" ON "outbox"("status")');
+			expect(sql).toContain('CREATE INDEX IF NOT EXISTS "idx_outbox_created_at" ON "outbox"("created_at")');
+			expect(sql).toContain(
+				'CREATE INDEX IF NOT EXISTS "idx_outbox_sequence_number" ON "outbox"("sequence_number")',
+			);
 		});
 
 		it("uses a custom table name in the SQL output", async () => {
@@ -51,8 +53,8 @@ describe("SqlMigrationAdapter", () => {
 			stdoutSpy.mockRestore();
 
 			const sql = written.join("");
-			expect(sql).toContain("CREATE TABLE IF NOT EXISTS my_outbox");
-			expect(sql).toContain("idx_my_outbox_status ON my_outbox(status)");
+			expect(sql).toContain('CREATE TABLE IF NOT EXISTS "my_outbox"');
+			expect(sql).toContain('"idx_my_outbox_status" ON "my_outbox"("status")');
 		});
 	});
 
@@ -69,13 +71,20 @@ describe("SqlMigrationAdapter", () => {
 			stdoutSpy.mockRestore();
 
 			const sql = written.join("");
-			expect(sql).toContain("CREATE TABLE IF NOT EXISTS outbox");
-			expect(sql).toContain("aggregateId");
-			expect(sql).toContain("aggregateType");
-			expect(sql).toContain("eventType");
-			expect(sql).toContain("sequenceNumber");
-			expect(sql).toContain("createdAt");
-			expect(sql).toContain("processedAt");
+			// Regression: identifiers must be quoted, otherwise Postgres folds them to lowercase
+			// and the columns no longer match the quoted names core (and Prisma) use.
+			expect(sql).toContain('CREATE TABLE IF NOT EXISTS "outbox"');
+			expect(sql).toContain('"aggregateId" VARCHAR(50) NOT NULL');
+			expect(sql).toContain('"aggregateType" VARCHAR(50) NOT NULL');
+			expect(sql).toContain('"eventType" VARCHAR(50) NOT NULL');
+			expect(sql).toContain('"sequenceNumber" BIGINT');
+			expect(sql).toContain('"createdAt" TIMESTAMP NOT NULL DEFAULT NOW()');
+			expect(sql).toContain('"processedAt" TIMESTAMP');
+			expect(sql).toContain('CREATE INDEX IF NOT EXISTS "idx_outbox_created_at" ON "outbox"("createdAt")');
+			expect(sql).toContain(
+				'CREATE INDEX IF NOT EXISTS "idx_outbox_sequence_number" ON "outbox"("sequenceNumber")',
+			);
+			expect(sql).not.toMatch(/[^"]aggregateId[^"]/);
 			expect(sql).not.toContain("aggregate_id");
 			expect(sql).not.toContain("aggregate_type");
 			expect(sql).not.toContain("event_type");
@@ -93,7 +102,8 @@ describe("SqlMigrationAdapter", () => {
 			stdoutSpy.mockRestore();
 
 			const sql = written.join("");
-			expect(sql).toContain("CREATE TABLE IF NOT EXISTS myOutbox");
+			expect(sql).toContain('CREATE TABLE IF NOT EXISTS "myOutbox"');
+			expect(sql).toContain('CREATE INDEX IF NOT EXISTS "idx_myOutbox_status" ON "myOutbox"("status")');
 		});
 	});
 
@@ -110,8 +120,9 @@ describe("SqlMigrationAdapter", () => {
 			stdoutSpy.mockRestore();
 
 			const sql = written.join("");
-			expect(sql).toContain("CREATE TABLE IF NOT EXISTS Outbox");
-			expect(sql).toContain("AggregateId");
+			expect(sql).toContain('CREATE TABLE IF NOT EXISTS "Outbox"');
+			expect(sql).toContain('"AggregateId" VARCHAR(50) NOT NULL');
+			expect(sql).toContain('CREATE INDEX IF NOT EXISTS "idx_Outbox_created_at" ON "Outbox"("CreatedAt")');
 			expect(sql).toContain("AggregateType");
 			expect(sql).toContain("EventType");
 			expect(sql).toContain("SequenceNumber");
@@ -132,7 +143,7 @@ describe("SqlMigrationAdapter", () => {
 			stdoutSpy.mockRestore();
 
 			const sql = written.join("");
-			expect(sql).toContain("CREATE TABLE IF NOT EXISTS MyOutbox");
+			expect(sql).toContain('CREATE TABLE IF NOT EXISTS "MyOutbox"');
 		});
 	});
 
@@ -151,7 +162,7 @@ describe("SqlMigrationAdapter", () => {
 			expect(writeFileSyncSpy).toHaveBeenCalledTimes(1);
 			const [filePath, content] = writeFileSyncSpy.mock.calls[0] as [string, string];
 			expect(filePath).toBe("./migrations/create_outbox.sql");
-			expect(content).toContain("CREATE TABLE IF NOT EXISTS outbox");
+			expect(content).toContain('CREATE TABLE IF NOT EXISTS "outbox"');
 
 			consoleSpy.mockRestore();
 			writeFileSyncSpy.mockRestore();
