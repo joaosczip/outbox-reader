@@ -488,3 +488,104 @@ describe("OutboxRepository.deleteProcessedBefore", () => {
 		expect(pool.calls).toHaveLength(0);
 	});
 });
+
+describe("OutboxRepository.requeueFailed", () => {
+	let pool: MockPgPool;
+
+	beforeEach(() => {
+		pool = new MockPgPool();
+	});
+
+	it("moves FAILED records back to PENDING with a single DELETE ... RETURNING + INSERT ... SELECT statement", async () => {
+		const repository = makeRepository(pool);
+		pool.enqueueResult({ rows: [{ id: "a" }, { id: "b" }] });
+
+		const requeued = await repository.requeueFailed(["a", "b", "c"]);
+
+		expect(requeued).toEqual(["a", "b"]);
+		expect(pool.calls).toHaveLength(1);
+		expect(normalizeSql(pool.lastCall().text)).toBe(
+			normalizeSql(`
+				WITH moved AS (
+					DELETE FROM "outbox" WHERE "id" = ANY($1) AND "status" = 'FAILED'
+					RETURNING "id", "aggregate_id", "aggregate_type", "event_type", "payload", "sequence_number", "attempts", "created_at"
+				)
+				INSERT INTO "outbox" (
+					"id", "aggregate_id", "aggregate_type", "event_type",
+					"payload", "sequence_number", "status", "attempts",
+					"created_at"
+				)
+				SELECT moved."id", moved."aggregate_id", moved."aggregate_type", moved."event_type",
+					moved."payload", moved."sequence_number", 'PENDING', moved."attempts",
+					NOW()
+				FROM moved
+				ORDER BY moved."created_at" ASC
+				RETURNING "id"
+			`),
+		);
+		expect(pool.lastCall().params).toEqual([["a", "b", "c"]]);
+	});
+
+	it("uses the configured column naming and table name", async () => {
+		const repository = makeRepository(pool, "PascalCase");
+		pool.enqueueResult({ rows: [{ id: "a" }] });
+
+		expect(await repository.requeueFailed(["a"])).toEqual(["a"]);
+
+		const sql = normalizeSql(pool.lastCall().text);
+		expect(sql).toContain(`DELETE FROM "Outbox" WHERE "id" = ANY($1) AND "status" = 'FAILED'`);
+		expect(sql).toContain(`RETURNING "id", "AggregateId", "AggregateType", "EventType"`);
+		expect(sql).toContain(`INSERT INTO "Outbox" (`);
+		expect(sql).toContain(`ORDER BY moved."CreatedAt" ASC RETURNING "id"`);
+	});
+
+	it("does not query for an empty id list", async () => {
+		const repository = makeRepository(pool);
+
+		expect(await repository.requeueFailed([])).toEqual([]);
+		expect(pool.calls).toHaveLength(0);
+	});
+});
+
+describe("OutboxRepository.markManyAsDead", () => {
+	let pool: MockPgPool;
+
+	beforeEach(() => {
+		pool = new MockPgPool();
+	});
+
+	it("marks many records DEAD in one statement with a per-row optimistic lock on attempts", async () => {
+		const repository = makeRepository(pool, "camelCase");
+		pool.enqueueResult({ rows: [{ id: "a" }] });
+
+		const marked = await repository.markManyAsDead([
+			{ id: "a", attempts: 5 },
+			{ id: "b", attempts: 7 },
+		]);
+
+		expect(marked).toEqual(["a"]);
+		expect(pool.calls).toHaveLength(1);
+		expect(normalizeSql(pool.lastCall().text)).toBe(
+			normalizeSql(`
+				UPDATE "outbox" AS t
+				SET "status" = 'DEAD'
+				FROM unnest($1::text[], $2::int[]) AS v(id, attempts)
+				WHERE t."id" = ANY($3) AND t."id"::text = v.id AND t."attempts" = v.attempts
+					AND t."status" IN ('PENDING', 'FAILED')
+				RETURNING t."id"
+			`),
+		);
+		expect(pool.lastCall().params).toEqual([
+			["a", "b"],
+			[5, 7],
+			["a", "b"],
+		]);
+	});
+
+	it("does not query for an empty list", async () => {
+		const repository = makeRepository(pool);
+
+		expect(await repository.markManyAsDead([])).toEqual([]);
+		expect(pool.calls).toHaveLength(0);
+	});
+});
