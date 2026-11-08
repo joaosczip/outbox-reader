@@ -15,8 +15,10 @@ import type { OutboxRecord } from "../models/outbox-record";
 import type { OutboxProcessor } from "../outbox-processor";
 import type { OutboxRepository } from "../outbox-repository";
 import type { Publisher } from "../types";
+import { runOrderedByKey } from "../utils/run-ordered-by-key";
 
 export const DEFAULT_BATCH_SIZE = 100;
+export const DEFAULT_CONCURRENCY = 10;
 
 export type SweepSummary = { scanned: number; republished: number; failed: number };
 
@@ -27,6 +29,8 @@ export type SweepParams = {
 	logger: Pick<Logger, "info" | "warn" | "error">;
 	thresholdMinutes: number;
 	batchSize?: number;
+	/** Maximum number of aggregates processed in parallel within a batch (integer >= 1). */
+	concurrency?: number;
 };
 
 export const run = async ({
@@ -36,7 +40,11 @@ export const run = async ({
 	logger,
 	thresholdMinutes,
 	batchSize = DEFAULT_BATCH_SIZE,
+	concurrency = DEFAULT_CONCURRENCY,
 }: SweepParams): Promise<SweepSummary> => {
+	if (!Number.isInteger(concurrency) || concurrency < 1) {
+		throw new RangeError(`concurrency must be an integer >= 1, received ${concurrency}`);
+	}
 	const summary: SweepSummary = { scanned: 0, republished: 0, failed: 0 };
 	// Records already handled in this run. A record the processor leaves PENDING (e.g. skipped
 	// because it reached max attempts) is returned again by the next query; tracking ids keeps
@@ -45,7 +53,7 @@ export const run = async ({
 
 	logger.info({
 		message: "Sweeping stale PENDING events",
-		extra: { thresholdMinutes, batchSize },
+		extra: { thresholdMinutes, batchSize, concurrency },
 	});
 
 	while (true) {
@@ -54,15 +62,23 @@ export const run = async ({
 
 		if (!fresh.length) break;
 
-		for (const record of fresh) {
-			seen.add(record.id as string);
-			summary.scanned++;
-			if (await republish({ record, repository, processor, publisher, logger })) {
-				summary.republished++;
-			} else {
-				summary.failed++;
-			}
-		}
+		for (const record of fresh) seen.add(record.id as string);
+		summary.scanned += fresh.length;
+
+		// Sequential per aggregate (in query order, i.e. oldest first), parallel across aggregates.
+		// republish() never rejects, so one failing record cannot abort the batch.
+		await runOrderedByKey(
+			fresh,
+			(record) => record.aggregateId,
+			async (record) => {
+				if (await republish({ record, repository, processor, publisher, logger })) {
+					summary.republished++;
+				} else {
+					summary.failed++;
+				}
+			},
+			{ concurrency },
+		);
 
 		// A short batch means there was nothing beyond it when it was read.
 		if (batch.length < batchSize) break;
@@ -111,7 +127,7 @@ const republish = async ({
 
 if (import.meta.main) {
 	const { Pool } = await import("pg");
-	const { getIntEnvOrDefault, loadCronConfig } = await import("../config");
+	const { config, getIntEnvOrDefault, loadCronConfig } = await import("../config");
 	const { Logger } = await import("../logger");
 	const { OutboxProcessor } = await import("../outbox-processor");
 	const { OutboxRepository } = await import("../outbox-repository");
@@ -127,7 +143,9 @@ if (import.meta.main) {
 		const cfg = loadCronConfig();
 		const publisherConfig = await loadPublisherConfig(cfg.publisherConfigPath);
 
-		pool = new Pool({ connectionString: cfg.connectionString });
+		// One pool connection per aggregate processed in parallel.
+		const concurrency = config.dbPoolSize;
+		pool = new Pool({ connectionString: cfg.connectionString, max: concurrency });
 		publisher = createPublisher(publisherConfig, logger);
 
 		const repository = new OutboxRepository({
@@ -150,6 +168,7 @@ if (import.meta.main) {
 			publisher,
 			logger,
 			thresholdMinutes: cfg.pendingThresholdMinutes,
+			concurrency,
 		});
 	} catch (error) {
 		logger.error({ message: "Stale PENDING sweep failed", error });
