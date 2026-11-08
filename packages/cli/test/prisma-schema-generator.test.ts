@@ -188,4 +188,138 @@ model User {
 		expect(content).toContain("tenantId        String?");
 		expect(content).toContain("version        Int @default(1)");
 	});
+
+	describe("indexes", () => {
+		const cases = [
+			{ naming: "snake_case", table: "outbox" },
+			{ naming: "camelCase", table: "outbox" },
+			{ naming: "PascalCase", table: "Outbox" },
+		] as const;
+
+		for (const { naming, table } of cases) {
+			it(`declares only partial createdAt indexes for PENDING and FAILED (${naming})`, async () => {
+				const generator = new PrismaSchemaGenerator({
+					config: { schemaPath: testSchemaPath, generateMigration: false, columnNaming: naming },
+				});
+
+				await generator.generateSchema();
+
+				const content = fs.readFileSync(testSchemaPath, "utf-8");
+				expect(content).toContain(
+					`@@index([createdAt], map: "idx_${table}_pending_created_at", where: { status: "PENDING" })`,
+				);
+				expect(content).toContain(
+					`@@index([createdAt], map: "idx_${table}_failed_created_at", where: { status: "FAILED" })`,
+				);
+				// Regression: the status, sequenceNumber and unfiltered createdAt indexes must be gone.
+				expect(content.match(/@@index\(/g)).toHaveLength(2);
+				expect(content).not.toContain("@@index([status])");
+				expect(content).not.toContain("@@index([sequenceNumber])");
+				expect(content).not.toContain("@@index([createdAt])");
+			});
+		}
+
+		it("derives partial index names from a custom table name", async () => {
+			const generator = new PrismaSchemaGenerator({
+				config: {
+					schemaPath: testSchemaPath,
+					tableName: "my_outbox",
+					generateMigration: false,
+					columnNaming: "PascalCase",
+				},
+			});
+
+			await generator.generateSchema();
+
+			const content = fs.readFileSync(testSchemaPath, "utf-8");
+			expect(content).toContain('map: "idx_MyOutbox_pending_created_at"');
+			expect(content).toContain('map: "idx_MyOutbox_failed_created_at"');
+		});
+
+		it("enables the partialIndexes preview feature in a new schema file", async () => {
+			const generator = new PrismaSchemaGenerator({
+				config: { schemaPath: testSchemaPath, generateMigration: false },
+			});
+
+			await generator.generateSchema();
+
+			const content = fs.readFileSync(testSchemaPath, "utf-8");
+			expect(content).toMatch(/generator client \{[^}]*previewFeatures = \["partialIndexes"\][^}]*\}/);
+		});
+
+		it("omits the datasource url in a new schema file, which Prisma >= 7 rejects", async () => {
+			const generator = new PrismaSchemaGenerator({
+				config: { schemaPath: testSchemaPath, generateMigration: false },
+			});
+
+			await generator.generateSchema();
+
+			const content = fs.readFileSync(testSchemaPath, "utf-8");
+			expect(content).toMatch(/datasource db \{\s*provider = "postgresql"\s*\}/);
+			expect(content).not.toContain("url ");
+		});
+
+		it("adds the partialIndexes preview feature to an existing generator without previewFeatures", async () => {
+			fs.writeFileSync(
+				testSchemaPath,
+				`generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+`,
+			);
+			const generator = new PrismaSchemaGenerator({
+				config: { schemaPath: testSchemaPath, generateMigration: false },
+			});
+
+			await generator.generateSchema();
+
+			const content = fs.readFileSync(testSchemaPath, "utf-8");
+			expect(content).toContain(`generator client {
+  provider = "prisma-client-js"
+  previewFeatures = ["partialIndexes"]
+}`);
+			expect(content).toContain("model OutboxRecord");
+		});
+
+		it("appends partialIndexes to an existing previewFeatures list", async () => {
+			fs.writeFileSync(
+				testSchemaPath,
+				`generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["relationJoins", "views"]
+}
+`,
+			);
+			const generator = new PrismaSchemaGenerator({
+				config: { schemaPath: testSchemaPath, generateMigration: false },
+			});
+
+			await generator.generateSchema();
+
+			const content = fs.readFileSync(testSchemaPath, "utf-8");
+			expect(content).toContain('previewFeatures = ["relationJoins", "views", "partialIndexes"]');
+		});
+
+		it("does not duplicate an already enabled partialIndexes preview feature", async () => {
+			const existing = `generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["partialIndexes"]
+}
+`;
+			fs.writeFileSync(testSchemaPath, existing);
+			const generator = new PrismaSchemaGenerator({
+				config: { schemaPath: testSchemaPath, generateMigration: false },
+			});
+
+			await generator.generateSchema();
+
+			const content = fs.readFileSync(testSchemaPath, "utf-8");
+			expect(content.startsWith(existing)).toBe(true);
+			expect(content.match(/partialIndexes/g)).toHaveLength(1);
+		});
+	});
 });
