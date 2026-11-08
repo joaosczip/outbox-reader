@@ -308,4 +308,69 @@ export class OutboxRepository {
 			client.release();
 		}
 	}
+
+	/**
+	 * Set-based requeue for the reprocess cron: in ONE statement, deletes the given records that
+	 * are still FAILED and re-inserts them as PENDING (same id, attempts, payload, sequence number;
+	 * `created_at = NOW()`, `processed_at` NULL). The re-INSERT is what produces the WAL event the
+	 * replication service reacts to. Rows are inserted in their original `created_at` order so the
+	 * per-aggregate WAL order is preserved. Returns the ids actually requeued (records that are no
+	 * longer FAILED are skipped).
+	 */
+	async requeueFailed(ids: string[]): Promise<string[]> {
+		if (ids.length === 0) return [];
+		const c = this.qcols;
+		const moved = [
+			c.id,
+			c.aggregateId,
+			c.aggregateType,
+			c.eventType,
+			c.payload,
+			c.sequenceNumber,
+			c.attempts,
+			c.createdAt,
+		];
+		const m = (col: string) => `moved.${col}`;
+		const query = `
+			WITH moved AS (
+				DELETE FROM ${this.tableName} WHERE ${c.id} = ANY($1) AND ${c.status} = 'FAILED'
+				RETURNING ${moved.join(", ")}
+			)
+			INSERT INTO ${this.tableName} (
+				${c.id}, ${c.aggregateId}, ${c.aggregateType}, ${c.eventType},
+				${c.payload}, ${c.sequenceNumber}, ${c.status}, ${c.attempts},
+				${c.createdAt}
+			)
+			SELECT ${m(c.id)}, ${m(c.aggregateId)}, ${m(c.aggregateType)}, ${m(c.eventType)},
+				${m(c.payload)}, ${m(c.sequenceNumber)}, 'PENDING', ${m(c.attempts)},
+				NOW()
+			FROM moved
+			ORDER BY ${m(c.createdAt)} ASC
+			RETURNING ${c.id}
+		`;
+		const result = await this.pool.query(query, [ids]);
+		return result.rows.map((row: OutboxRow) => String(row[this.cols.id]));
+	}
+
+	/**
+	 * Set-based DEAD transition with a per-row optimistic lock on `attempts` (and PENDING/FAILED
+	 * status). Returns the ids actually marked; any input id missing from the result was a lock
+	 * miss. Ids are compared as text so it works for both UUID and text id columns, while
+	 * `id = ANY($3)` (typed by the column) keeps the primary-key index usable.
+	 */
+	async markManyAsDead(records: { id: string; attempts: number }[]): Promise<string[]> {
+		if (records.length === 0) return [];
+		const c = this.qcols;
+		const ids = records.map((r) => r.id);
+		const query = `
+			UPDATE ${this.tableName} AS t
+			SET ${c.status} = 'DEAD'
+			FROM unnest($1::text[], $2::int[]) AS v(id, attempts)
+			WHERE t.${c.id} = ANY($3) AND t.${c.id}::text = v.id AND t.${c.attempts} = v.attempts
+				AND t.${c.status} IN ('PENDING', 'FAILED')
+			RETURNING t.${c.id}
+		`;
+		const result = await this.pool.query(query, [ids, records.map((r) => r.attempts), ids]);
+		return result.rows.map((row: OutboxRow) => String(row[this.cols.id]));
+	}
 }
