@@ -124,4 +124,75 @@ describe("NATSPublisher (unit)", () => {
 		expect(errors).toHaveLength(1);
 		expect(errors[0].error).toBe(failure);
 	});
+	describe("JetStream client reuse", () => {
+		it("creates the JetStream client once across multiple publishes", async () => {
+			const records = ["evt-1", "evt-2", "evt-3"].map((id) =>
+				buildRecord({ id, aggregateId: "order-1", eventType: "OrderCreated" }),
+			);
+
+			for (const record of records) {
+				await publisher.publish({ record });
+			}
+
+			expect(jsPublish).toHaveBeenCalledTimes(3);
+			expect(jetstreamSpy).toHaveBeenCalledTimes(1);
+			expect(connectSpy).toHaveBeenCalledTimes(1);
+		});
+
+		it("recreates the JetStream client on the new connection after close and reconnect", async () => {
+			const firstConnection = { close: async () => {}, isClosed: () => false };
+			const secondConnection = { close: async () => {}, isClosed: () => false };
+			connectSpy.mockResolvedValueOnce(firstConnection as never).mockResolvedValueOnce(secondConnection as never);
+			const record = buildRecord({ id: "evt-1", aggregateId: "order-1", eventType: "OrderCreated" });
+
+			await publisher.publish({ record });
+			await publisher.close();
+			await publisher.publish({ record });
+			await publisher.publish({ record });
+
+			expect(connectSpy).toHaveBeenCalledTimes(2);
+			expect(jetstreamSpy).toHaveBeenCalledTimes(2);
+			expect(jetstreamSpy.mock.calls[0][0]).toBe(firstConnection);
+			expect(jetstreamSpy.mock.calls[1][0]).toBe(secondConnection);
+			expect(jsPublish).toHaveBeenCalledTimes(3);
+		});
+
+		it("creates the JetStream client when connect() is called explicitly before publishing", async () => {
+			await publisher.connect();
+			expect(jetstreamSpy).toHaveBeenCalledTimes(1);
+
+			await publisher.publish({ record: buildRecord({ id: "evt-1", aggregateId: "o-1", eventType: "E" }) });
+
+			expect(jetstreamSpy).toHaveBeenCalledTimes(1);
+		});
+	});
+
+	describe("hot-path logging", () => {
+		it("does not log at info for successful publishes once connected", async () => {
+			await publisher.connect();
+			logger.logs = [];
+
+			await publisher.publish({ record: buildRecord({ id: "evt-1", aggregateId: "order-1", eventType: "A" }) });
+			await publisher.publish({ record: buildRecord({ id: "evt-2", aggregateId: "order-2", eventType: "B" }) });
+
+			expect(logger.logs.filter((l) => l.level === "info")).toHaveLength(0);
+			const debugLogs = logger.logs.filter((l) => l.level === "debug");
+			expect(debugLogs).toHaveLength(2);
+			expect(debugLogs.map((l) => l.extra)).toEqual([
+				{ subject: `${SUBJECT_PREFIX}.A`, id: "evt-1", aggregateId: "order-1", aggregateType: "Order", sequenceNumber: 1 },
+				{ subject: `${SUBJECT_PREFIX}.B`, id: "evt-2", aggregateId: "order-2", aggregateType: "Order", sequenceNumber: 2 },
+			]);
+		});
+
+		it("does not emit a success debug log when the publish fails", async () => {
+			jsPublish.mockRejectedValueOnce(new Error("boom"));
+
+			await expect(
+				publisher.publish({ record: buildRecord({ id: "evt-1", aggregateId: "o-1", eventType: "E" }) }),
+			).rejects.toThrow("boom");
+
+			expect(logger.logs.filter((l) => l.level === "debug")).toHaveLength(0);
+			expect(logger.logs.filter((l) => l.level === "error")).toHaveLength(1);
+		});
+	});
 });

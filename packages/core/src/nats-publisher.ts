@@ -1,4 +1,4 @@
-import { jetstream } from "@nats-io/jetstream";
+import { type JetStreamClient, jetstream } from "@nats-io/jetstream";
 import { type NatsConnection, connect } from "nats";
 
 import type { Logger } from "./logger";
@@ -8,6 +8,8 @@ import type { NATSConnectionConfig, Publisher, RetryConfig } from "./types";
 
 export class NATSPublisher implements Publisher {
 	private connection: NatsConnection | null = null;
+	/** Created once per connection and reused by every publish; reset on close(). */
+	private jetStreamClient: JetStreamClient | null = null;
 	readonly retryConfig: RetryConfig;
 	private logger: Logger;
 	private connectionConfig: NATSConnectionConfig;
@@ -44,6 +46,7 @@ export class NATSPublisher implements Publisher {
 		});
 
 		this.connection = await connect(this.connectionConfig);
+		this.jetStreamClient = jetstream(this.connection as unknown as Parameters<typeof jetstream>[0]);
 
 		this.logger.info({
 			message: "NATS connection established successfully",
@@ -53,19 +56,11 @@ export class NATSPublisher implements Publisher {
 	async publish({ record }: { record: OutboxRecord }): Promise<number> {
 		await this.connect();
 
-		const jc = jetstream(this.connection as unknown as Parameters<typeof jetstream>[0]);
+		const jc = this.jetStreamClient as JetStreamClient;
 
 		const subject = `${this.subjectPrefix}.${record.eventType}`;
 		const start = Date.now();
 		try {
-			this.logger.info({
-				message: "Publishing message to NATS stream",
-				extra: {
-					subject,
-					aggregateId: record.aggregateId,
-					aggregateType: record.aggregateType,
-				},
-			});
 			const payload = typeof record.payload === "string" ? record.payload : JSON.stringify(record.payload);
 			// msgID must be unique per event: JetStream drops messages with a repeated msgID inside the
 			// duplicate window. record.id keeps retries of the same record deduplicated while letting
@@ -86,10 +81,11 @@ export class NATSPublisher implements Publisher {
 				});
 			}
 
-			this.logger.info({
+			this.logger.debug({
 				message: "Published message to NATS stream",
 				extra: {
 					subject,
+					id: record.id,
 					aggregateId: record.aggregateId,
 					aggregateType: record.aggregateType,
 					sequenceNumber: seq,
@@ -123,6 +119,7 @@ export class NATSPublisher implements Publisher {
 
 			await this.connection.close();
 			this.connection = null;
+			this.jetStreamClient = null;
 
 			this.logger.info({
 				message: "NATS connection closed",
