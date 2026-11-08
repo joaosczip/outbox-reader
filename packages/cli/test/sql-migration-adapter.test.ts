@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
 import fs from "node:fs";
 import { SqlMigrationAdapter } from "../src/services/sql-migration-adapter";
 
@@ -34,11 +34,6 @@ describe("SqlMigrationAdapter", () => {
 			expect(sql).toContain('"created_at" TIMESTAMP NOT NULL DEFAULT NOW()');
 			expect(sql).toContain('"processed_at" TIMESTAMP');
 			expect(sql).toContain('"sequence_number" BIGINT');
-			expect(sql).toContain('CREATE INDEX IF NOT EXISTS "idx_outbox_status" ON "outbox"("status")');
-			expect(sql).toContain('CREATE INDEX IF NOT EXISTS "idx_outbox_created_at" ON "outbox"("created_at")');
-			expect(sql).toContain(
-				'CREATE INDEX IF NOT EXISTS "idx_outbox_sequence_number" ON "outbox"("sequence_number")',
-			);
 		});
 
 		it("uses a custom table name in the SQL output", async () => {
@@ -54,7 +49,7 @@ describe("SqlMigrationAdapter", () => {
 
 			const sql = written.join("");
 			expect(sql).toContain('CREATE TABLE IF NOT EXISTS "my_outbox"');
-			expect(sql).toContain('"idx_my_outbox_status" ON "my_outbox"("status")');
+			expect(sql).toContain('"idx_my_outbox_pending_created_at" ON "my_outbox"("created_at")');
 		});
 	});
 
@@ -80,10 +75,6 @@ describe("SqlMigrationAdapter", () => {
 			expect(sql).toContain('"sequenceNumber" BIGINT');
 			expect(sql).toContain('"createdAt" TIMESTAMP NOT NULL DEFAULT NOW()');
 			expect(sql).toContain('"processedAt" TIMESTAMP');
-			expect(sql).toContain('CREATE INDEX IF NOT EXISTS "idx_outbox_created_at" ON "outbox"("createdAt")');
-			expect(sql).toContain(
-				'CREATE INDEX IF NOT EXISTS "idx_outbox_sequence_number" ON "outbox"("sequenceNumber")',
-			);
 			expect(sql).not.toMatch(/[^"]aggregateId[^"]/);
 			expect(sql).not.toContain("aggregate_id");
 			expect(sql).not.toContain("aggregate_type");
@@ -103,7 +94,7 @@ describe("SqlMigrationAdapter", () => {
 
 			const sql = written.join("");
 			expect(sql).toContain('CREATE TABLE IF NOT EXISTS "myOutbox"');
-			expect(sql).toContain('CREATE INDEX IF NOT EXISTS "idx_myOutbox_status" ON "myOutbox"("status")');
+			expect(sql).toContain('"idx_myOutbox_pending_created_at" ON "myOutbox"("createdAt")');
 		});
 	});
 
@@ -122,7 +113,6 @@ describe("SqlMigrationAdapter", () => {
 			const sql = written.join("");
 			expect(sql).toContain('CREATE TABLE IF NOT EXISTS "Outbox"');
 			expect(sql).toContain('"AggregateId" VARCHAR(50) NOT NULL');
-			expect(sql).toContain('CREATE INDEX IF NOT EXISTS "idx_Outbox_created_at" ON "Outbox"("CreatedAt")');
 			expect(sql).toContain("AggregateType");
 			expect(sql).toContain("EventType");
 			expect(sql).toContain("SequenceNumber");
@@ -144,6 +134,63 @@ describe("SqlMigrationAdapter", () => {
 
 			const sql = written.join("");
 			expect(sql).toContain('CREATE TABLE IF NOT EXISTS "MyOutbox"');
+		});
+	});
+
+	describe("createMigration - indexes", () => {
+		let written: string[];
+		let stdoutSpy: ReturnType<typeof spyOn>;
+
+		beforeEach(() => {
+			written = [];
+			stdoutSpy = spyOn(process.stdout, "write").mockImplementation((chunk) => {
+				written.push(String(chunk));
+				return true;
+			});
+		});
+
+		afterEach(() => {
+			stdoutSpy.mockRestore();
+		});
+
+		const cases = [
+			{ naming: "snake_case", table: "outbox", createdAt: "created_at", sequenceNumber: "sequence_number" },
+			{ naming: "camelCase", table: "outbox", createdAt: "createdAt", sequenceNumber: "sequenceNumber" },
+			{ naming: "PascalCase", table: "Outbox", createdAt: "CreatedAt", sequenceNumber: "SequenceNumber" },
+		] as const;
+
+		for (const { naming, table, createdAt, sequenceNumber } of cases) {
+			it(`creates only partial created_at indexes for PENDING and FAILED (${naming})`, async () => {
+				await adapter.createMigration({ target: "sql", columnNaming: naming });
+
+				const sql = written.join("");
+				expect(sql).toContain(
+					`CREATE INDEX IF NOT EXISTS "idx_${table}_pending_created_at" ON "${table}"("${createdAt}") WHERE "status" = 'PENDING';`,
+				);
+				expect(sql).toContain(
+					`CREATE INDEX IF NOT EXISTS "idx_${table}_failed_created_at" ON "${table}"("${createdAt}") WHERE "status" = 'FAILED';`,
+				);
+				// Regression: the low-selectivity status index, the unused sequence_number index and the
+				// unfiltered created_at index amplify every status UPDATE and must not be generated.
+				expect(sql.match(/CREATE INDEX/g)).toHaveLength(2);
+				expect(sql).not.toContain(`ON "${table}"("status")`);
+				expect(sql).not.toContain(`("${sequenceNumber}")`);
+				expect(sql).not.toContain(`"idx_${table}_status"`);
+				expect(sql).not.toContain(`"idx_${table}_sequence_number"`);
+				expect(sql).not.toContain(`"idx_${table}_created_at"`);
+			});
+		}
+
+		it("derives partial index names from a custom table name", async () => {
+			await adapter.createMigration({ target: "sql", tableName: "my_outbox", columnNaming: "PascalCase" });
+
+			const sql = written.join("");
+			expect(sql).toContain(
+				`CREATE INDEX IF NOT EXISTS "idx_MyOutbox_pending_created_at" ON "MyOutbox"("CreatedAt") WHERE "status" = 'PENDING';`,
+			);
+			expect(sql).toContain(
+				`CREATE INDEX IF NOT EXISTS "idx_MyOutbox_failed_created_at" ON "MyOutbox"("CreatedAt") WHERE "status" = 'FAILED';`,
+			);
 		});
 	});
 

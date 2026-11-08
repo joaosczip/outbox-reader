@@ -41,9 +41,11 @@ CREATE TABLE IF NOT EXISTS ${t} (
   ${q(cols.sequenceNumber)} BIGINT
 );
 
-CREATE INDEX IF NOT EXISTS ${q(`idx_${tableName}_status`)} ON ${t}(${q(cols.status)});
-CREATE INDEX IF NOT EXISTS ${q(`idx_${tableName}_created_at`)} ON ${t}(${q(cols.createdAt)});
-CREATE INDEX IF NOT EXISTS ${q(`idx_${tableName}_sequence_number`)} ON ${t}(${q(cols.sequenceNumber)});
+-- Partial indexes matching the only status-based reads (FAILED reprocessing and the stale
+-- PENDING sweeper). They stay small because PROCESSED/DEAD rows (the vast majority) are not
+-- indexed, and a PENDING -> PROCESSED update adds no entry to them.
+CREATE INDEX IF NOT EXISTS ${q(`idx_${tableName}_pending_created_at`)} ON ${t}(${q(cols.createdAt)}) WHERE ${q(cols.status)} = 'PENDING';
+CREATE INDEX IF NOT EXISTS ${q(`idx_${tableName}_failed_created_at`)} ON ${t}(${q(cols.createdAt)}) WHERE ${q(cols.status)} = 'FAILED';
 `;
 	}
 }
