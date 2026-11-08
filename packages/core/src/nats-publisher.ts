@@ -67,8 +67,24 @@ export class NATSPublisher implements Publisher {
 				},
 			});
 			const payload = typeof record.payload === "string" ? record.payload : JSON.stringify(record.payload);
-			const { seq } = await jc.publish(subject, payload, { msgID: record.aggregateId });
+			// msgID must be unique per event: JetStream drops messages with a repeated msgID inside the
+			// duplicate window. record.id keeps retries of the same record deduplicated while letting
+			// distinct events of the same aggregate through.
+			const { seq, duplicate } = await jc.publish(subject, payload, { msgID: record.id });
 			publishDuration.record(Date.now() - start, { "event.type": record.eventType, outcome: "success" });
+
+			if (duplicate) {
+				this.logger.warn({
+					message: "NATS reported message as duplicate; already published for this record id",
+					extra: {
+						subject,
+						id: record.id,
+						aggregateId: record.aggregateId,
+						aggregateType: record.aggregateType,
+						sequenceNumber: seq,
+					},
+				});
+			}
 
 			this.logger.info({
 				message: "Published message to NATS stream",

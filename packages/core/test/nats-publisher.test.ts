@@ -165,5 +165,42 @@ describe("NATSPublisher", () => {
 			expect(received?.subject).toBe(`${SUBJECT_PREFIX}.OrderCreated`);
 			expect(JSON.parse(received?.data ?? "")).toEqual({ orderId: "123" });
 		});
+
+		it("does not deduplicate distinct events of the same aggregate", async () => {
+			const publisher = new NATSPublisher({
+				retryConfig,
+				logger,
+				connectionConfig,
+				subjectPrefix: SUBJECT_PREFIX,
+			});
+
+			const created = new OutboxRecord({
+				id: "dedup-1",
+				eventType: "OrderCreated",
+				aggregateId: "agg-dedup",
+				aggregateType: "Order",
+				payload: "{}",
+				status: OutboxStatus.PENDING,
+				attempts: 0,
+			});
+			const paid = new OutboxRecord({
+				id: "dedup-2",
+				eventType: "OrderPaid",
+				aggregateId: "agg-dedup",
+				aggregateType: "Order",
+				payload: "{}",
+				status: OutboxStatus.PENDING,
+				attempts: 0,
+			});
+
+			const firstSeq = await publisher.publish({ record: created });
+			const secondSeq = await publisher.publish({ record: paid });
+			const retrySeq = await publisher.publish({ record: paid });
+			await publisher.close();
+
+			expect(secondSeq).toBeGreaterThan(firstSeq);
+			// A retry of the same record id is deduplicated by JetStream and returns the original seq
+			expect(retrySeq).toBe(secondSeq);
+		});
 	});
 });
