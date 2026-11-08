@@ -13,6 +13,7 @@ import { startReplication } from "./replication";
 import { RetryQueue } from "./retry-queue";
 import { shutdownTelemetry } from "./telemetry";
 import type { Publisher } from "./types";
+import { applyNamingToTableName } from "./utils/column-naming";
 import { createWalChangeHandler } from "./wal-change-handler";
 
 const logger = new Logger("outbox-reader");
@@ -156,6 +157,8 @@ process.once("SIGINT", () => shutdown("SIGINT"));
 	replicationService = await startReplication({
 		connectionString,
 		slotName,
+		// Physical table name (same naming as OutboxProcessor) so wal2json streams only outbox INSERTs.
+		tableName: applyNamingToTableName(config.tableName, config.columnNaming),
 		onChange,
 		// Postgres acks are cumulative: acknowledging a later LSN would implicitly confirm a
 		// failed one. Any replication/processing error is therefore fatal; the restarted
