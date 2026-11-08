@@ -8,4 +8,6 @@ export interface Publisher {
 	connect(): Promise<void>;
 	close(): Promise<void>;
 	publish: (params: { record: OutboxRecord }) => Promise<number>;
+	/** Optional connection status, used by the readiness check. Publishers without it count as connected. */
+	isConnected?(): boolean;
 }

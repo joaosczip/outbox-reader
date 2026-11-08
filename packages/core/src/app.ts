@@ -1,12 +1,10 @@
 import "./telemetry";
-import pAll from "p-all";
 import { Pool } from "pg";
-import type { LogicalReplicationService, Wal2Json } from "pg-logical-replication";
+import type { LogicalReplicationService } from "pg-logical-replication";
 
 import { config, dbWriteRetryConfig, maxOutboxAttempts, retryQueueConfig } from "./config";
 import { startHealthServer } from "./health";
 import { Logger } from "./logger";
-import { processingDuration, recordsFiltered, walEventsReceived } from "./metrics";
 import { OutboxProcessor } from "./outbox-processor";
 import { OutboxRepository } from "./outbox-repository";
 import { loadPublisherConfig } from "./publisher-config";
@@ -15,6 +13,7 @@ import { startReplication } from "./replication";
 import { RetryQueue } from "./retry-queue";
 import { shutdownTelemetry } from "./telemetry";
 import type { Publisher } from "./types";
+import { createWalChangeHandler } from "./wal-change-handler";
 
 const logger = new Logger("outbox-reader");
 const healthServer = startHealthServer(); // binds PORT env var (default 4599)
@@ -38,14 +37,27 @@ const outboxProcessor = new OutboxProcessor({
 let publisher: Publisher | null = null;
 let retryQueue: RetryQueue | null = null;
 
-const { connectionString, slotName } = config;
-
 let replicationService: LogicalReplicationService | null = null;
+let replicationHealthy = false;
 let isShuttingDown = false;
 
-async function shutdown(signal: string): Promise<void> {
+// Readiness: only "ready" while replication is subscribed and error-free, the publisher
+// is connected and the database answers.
+healthServer.setReadinessCheck("replication", () => replicationHealthy);
+healthServer.setReadinessCheck("publisher", () => (publisher ? (publisher.isConnected?.() ?? true) : false));
+healthServer.setReadinessCheck("database", async () => {
+	await pool.query("SELECT 1");
+	return true;
+});
+
+/**
+ * Graceful shutdown. Exits with code 1 when `failed` is true (fatal replication/startup
+ * error) or when any shutdown step fails; with 0 otherwise.
+ */
+async function shutdown(signal: string, { failed = false }: { failed?: boolean } = {}): Promise<void> {
 	if (isShuttingDown) return;
 	isShuttingDown = true;
+	replicationHealthy = false;
 
 	logger.info({ message: `Received ${signal}, starting graceful shutdown` });
 	const errors: unknown[] = [];
@@ -109,13 +121,14 @@ async function shutdown(signal: string): Promise<void> {
 	}
 
 	logger.info({ message: "Graceful shutdown complete" });
-	process.exit(errors.length > 0 ? 1 : 0);
+	process.exit(failed || errors.length > 0 ? 1 : 0);
 }
 
 process.once("SIGTERM", () => shutdown("SIGTERM"));
 process.once("SIGINT", () => shutdown("SIGINT"));
 
 (async () => {
+	const { connectionString, slotName } = config;
 	const publisherConfig = await loadPublisherConfig(config.publisherConfigPath);
 	publisher = createPublisher(publisherConfig, logger);
 
@@ -129,42 +142,31 @@ process.once("SIGINT", () => shutdown("SIGINT"));
 		config: retryQueueConfig,
 	});
 
+	const onChange = createWalChangeHandler({
+		processor: outboxProcessor,
+		repository: outboxRepository,
+		publisher,
+		retryQueue,
+		logger,
+		concurrency: config.dbPoolSize,
+	});
+
 	replicationService = await startReplication({
 		connectionString,
 		slotName,
-		onChange: async (log: Wal2Json.Output) => {
-			walEventsReceived.add(1);
-
-			const outboxRecords = outboxProcessor.filterChanges(log);
-			recordsFiltered.add(outboxRecords.length);
-
-			const ids = outboxRecords.map((r) => r.id as string);
-			const fetchedRecords = await outboxRepository.findUnprocessedByIds(ids);
-			const fetchedMap = new Map(fetchedRecords.map((r) => [r.id, r]));
-
-			const activePublisher = publisher as Publisher;
-			await pAll(
-				outboxRecords.map((record) => async () => {
-					const start = Date.now();
-					try {
-						await outboxProcessor.processInserts({
-							insertedRecord: record,
-							prefetchedOutbox: fetchedMap.get(record.id as string) ?? null,
-							publisher: activePublisher,
-						});
-						processingDuration.record(Date.now() - start, { "event.type": record.eventType });
-					} catch (error) {
-						processingDuration.record(Date.now() - start, { "event.type": record.eventType });
-						logger.error({
-							message: `Outbox record ${record.id} failed on first attempt, enqueueing for retry`,
-							extra: { recordId: record.id },
-							error,
-						});
-						retryQueue?.enqueue(record);
-					}
-				}),
-				{ concurrency: config.dbPoolSize },
-			);
+		onChange,
+		// Postgres acks are cumulative: acknowledging a later LSN would implicitly confirm a
+		// failed one. Any replication/processing error is therefore fatal; the restarted
+		// process resumes from the last confirmed LSN.
+		onError: (error) => {
+			replicationHealthy = false;
+			if (isShuttingDown) return;
+			logger.error({ message: "Replication error, shutting down to resume from the last confirmed LSN", error });
+			void shutdown("replication-error", { failed: true });
 		},
 	});
-})().catch((error) => logger.error({ message: "Error starting replication", error }));
+	if (!isShuttingDown) replicationHealthy = true;
+})().catch((error) => {
+	logger.error({ message: "Error starting outbox reader", error });
+	void shutdown("startup-failure", { failed: true });
+});

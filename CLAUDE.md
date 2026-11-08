@@ -87,6 +87,12 @@ PostgreSQL WAL → replication.ts → OutboxProcessor → NATSPublisher → NATS
 3. `OutboxProcessor.processInserts()` fetches the record from DB (to confirm it's still `PENDING`/`FAILED`), calls `publisher.publish()`, then marks it as `PROCESSED`.
 4. On failure, it marks the record `FAILED` and increments the attempt counter.
 
+The WAL `onChange` callback is built by `createWalChangeHandler()` (`packages/core/src/wal-change-handler.ts`): filter → one batched `findUnprocessedByIds` prefetch → `runOrderedByKey` keyed by `aggregateId` (sequential per aggregate in WAL order, parallel across aggregates, concurrency = `DB_POOL_SIZE`). Per-record publish failures go to the `RetryQueue` and do not reject; batch-level failures (e.g. the prefetch query) reject so the LSN is not acked.
+
+Because Postgres acks are cumulative, `app.ts` treats replication `onError` as fatal: it runs the graceful shutdown and exits with code 1 so the restarted process resumes from the last confirmed LSN. Startup failures also exit 1. The health server exposes `/live`, and `/ready` (alias `/health`) with readiness checks `replication`, `publisher` (`isConnected?.()`) and `database` (`SELECT 1`).
+
+`DATABASE_URL` must be a plain URL (no `?replication=database`): `replication.ts` adds it for the replication connection, and the same URL feeds the regular `pg.Pool`.
+
 ### Key Classes
 
 - **`OutboxProcessor`** (`packages/core/src/outbox-processor.ts`): Central orchestrator. Filters WAL changes to outbox inserts, processes them, and delegates to repository and publisher. Both `filterChanges()` and `processInserts()` are separate to allow independent testing.

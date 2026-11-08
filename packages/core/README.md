@@ -15,6 +15,14 @@ PostgreSQL WAL → replication.ts → OutboxProcessor → NATSPublisher → NATS
 3. `OutboxProcessor.processInserts()` fetches the record from DB (must be `PENDING` or `FAILED`), calls `publisher.publish()`, then marks it `PROCESSED`.
 4. On failure, marks the record `FAILED` and increments the attempt counter.
 
+Within one WAL transaction, events of the same `aggregateId` are published sequentially in commit order; different aggregates are processed in parallel (up to `DB_POOL_SIZE`).
+
+### Health and failure behaviour
+
+- `GET /live` — 200 while the process is up.
+- `GET /ready` (alias `/health`) — 200 only when every readiness check passes (`replication` subscribed and error-free, `publisher` connected, `database` answers `SELECT 1`); 503 otherwise.
+- A WAL LSN is acknowledged only after its events were published (or handed to the retry queue). Because PostgreSQL acknowledgements are cumulative, any replication or batch-processing error (e.g. the database being unreachable) makes the service shut down with exit code 1, so the restarted process resumes from the last confirmed LSN. Startup failures (publisher config/connect, replication subscribe) also exit with code 1.
+
 ### Record lifecycle
 
 ```
@@ -27,7 +35,7 @@ FAILED  → PENDING     (reprocess cronjob re-inserts, re-triggering WAL)
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `DATABASE_URL` | Yes | — | PostgreSQL connection string (logical replication must be enabled) |
+| `DATABASE_URL` | Yes | — | PostgreSQL connection string (logical replication must be enabled). Use a plain URL — do **not** add `?replication=database`: the service adds it for the replication connection only, and the same URL also feeds the regular query pool. |
 | `REPLICATION_SLOT_NAME` | Yes | — | Name of the PostgreSQL logical replication slot |
 | `TARGET_NATS_URL` | No | `nats://localhost:4222` | NATS server URL |
 | `PORT` | No | `4599` | Port for the health check HTTP server |
@@ -49,7 +57,7 @@ Build and run only the `outbox-reader` service against an already-running Postgr
 docker build -f packages/core/Dockerfile -t outbox-reader .
 
 docker run -d \
-  -e DATABASE_URL="postgres://user:pass@host:5432/mydb?replication=database" \
+  -e DATABASE_URL="postgres://user:pass@host:5432/mydb" \
   -e REPLICATION_SLOT_NAME="my_slot" \
   -e TARGET_NATS_URL="nats://nats-host:4222" \
   -p 4599:4599 \
@@ -106,7 +114,7 @@ Default environment in compose (override as needed):
 
 | Variable | Default |
 |---|---|
-| `DATABASE_URL` | `postgres://root:root@ecomm-be-pg:5432/ecomm-be?replication=database` |
+| `DATABASE_URL` | `postgres://root:root@ecomm-be-pg:5432/ecomm-be` |
 | `REPLICATION_SLOT_NAME` | `outbox_slot` |
 | `TARGET_NATS_URL` | `nats://ecomm-be-nats:4222` |
 | `PORT` | `4599` |

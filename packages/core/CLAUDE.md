@@ -40,6 +40,7 @@ src/
 ├── publisher-factory.ts          — instantiates publishers from YAML config
 ├── publisher-config.ts           — YAML-based publisher configuration types
 ├── retry-queue.ts                — in-memory retry queue with backoff for non-blocking record retries
+├── wal-change-handler.ts         — createWalChangeHandler(): WAL onChange (prefetch, per-aggregate ordering, retry enqueue)
 ├── health.ts                     — /live, /ready (+ /health alias) with pluggable readiness checks (setReadinessCheck)
 ├── logger.ts                     — pino logger
 ├── lib.ts                        — public API exports for programmatic use

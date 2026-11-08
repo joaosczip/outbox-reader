@@ -291,7 +291,7 @@ This starts three services:
 | NATS | `ecomm-be-nats` | `4222`, `8222` |
 | outbox-reader | `outbox-reader` | `4599` (health) |
 
-`outbox-reader` depends on both `db` and `nats` and will restart on failure. Its health is checked via `GET /health` on port `4599`.
+`outbox-reader` depends on both `db` and `nats` and will restart on failure. Its health is checked via `GET /health` on port `4599`. The service exposes `GET /live` (process up) and `GET /ready` (alias `/health`; 503 unless replication, publisher and database checks pass). On a replication error, or if it fails to start, it exits with code 1, so the restart policy resumes from the last confirmed WAL position.
 
 ### Environment variables for the outbox-reader container
 
@@ -299,7 +299,7 @@ The compose file sets these defaults — override them to match your setup:
 
 | Variable | Default in compose |
 |---|---|
-| `DATABASE_URL` | `postgres://root:root@ecomm-be-pg:5432/ecomm-be?replication=database` |
+| `DATABASE_URL` | `postgres://root:root@ecomm-be-pg:5432/ecomm-be` |
 | `REPLICATION_SLOT_NAME` | `outbox_slot` |
 | `TARGET_NATS_URL` | `nats://ecomm-be-nats:4222` |
 | `PORT` | `4599` |
@@ -313,7 +313,7 @@ If you already have Postgres and NATS running elsewhere, build and run just the 
 docker build -f packages/core/Dockerfile -t outbox-reader .
 
 docker run -d \
-  -e DATABASE_URL="postgres://user:pass@host:5432/mydb?replication=database" \
+  -e DATABASE_URL="postgres://user:pass@host:5432/mydb" \
   -e REPLICATION_SLOT_NAME="my_slot" \
   -e TARGET_NATS_URL="nats://nats-host:4222" \
   -p 4599:4599 \
@@ -324,7 +324,7 @@ docker run -d \
 
 Required environment variables:
 
-- `DATABASE_URL` — PostgreSQL connection string (logical replication must be enabled)
+- `DATABASE_URL` — PostgreSQL connection string (logical replication must be enabled). Use a plain URL without `?replication=database`: the service adds it to the replication connection itself, and the same URL is used for regular queries.
 - `REPLICATION_SLOT_NAME` — Name of the PostgreSQL replication slot
 
 NATS configuration:
