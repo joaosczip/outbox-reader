@@ -124,7 +124,21 @@ bun run check-pending-events
 
 ## Health check
 
-`GET /health` → `{ "status": "ok" }` on port `PORT` (default `4599`).
+Served on port `PORT` (default `4599`):
+
+- `GET /live` → always `200 { "status": "ok" }` (liveness probe).
+- `GET /ready` → runs all registered readiness checks concurrently (each bounded by `checkTimeoutMs`, default `2000`). A check that returns `false`, throws or times out is `"fail"`. Returns `200 { "status": "ok", "checks": { "<name>": "ok" } }` when all pass (or none are registered), `503 { "status": "fail", "checks": { ... } }` otherwise.
+- `GET /health` → alias of `/ready` (backward compatible).
+
+```ts
+const server = startHealthServer({ port: 4599, checkTimeoutMs: 2000, readinessChecks: { db: () => true } });
+// register/replace checks later, e.g. once the publisher exists
+server.setReadinessCheck("nats", async () => publisher.isConnected());
+server.removeReadinessCheck("db");
+server.stop(true);
+```
+
+`startHealthServer()` and `startHealthServer(port)` remain supported.
 
 ## Testing
 
@@ -142,7 +156,7 @@ bun test test/outbox-processor.test.ts
 | `OutboxRepository` | `src/outbox-repository.ts` | All DB interactions with exponential backoff |
 | `NATSPublisher` | `src/nats-publisher.ts` | Lazy-connect NATS publisher with retry |
 | `startReplication` | `src/replication.ts` | Thin wrapper around `LogicalReplicationService` |
-| `startHealthServer` | `src/health.ts` | Minimal HTTP health endpoint |
+| `startHealthServer` | `src/health.ts` | HTTP liveness (`/live`) and readiness (`/ready`, `/health`) endpoints |
 
 ## Programmatic use
 
