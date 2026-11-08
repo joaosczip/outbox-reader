@@ -141,6 +141,7 @@ process.once("SIGINT", () => shutdown("SIGINT"));
 		logger,
 		config: retryQueueConfig,
 		maxAttempts: maxOutboxAttempts,
+		concurrency: config.dbPoolSize,
 	});
 
 	const onChange = createWalChangeHandler({

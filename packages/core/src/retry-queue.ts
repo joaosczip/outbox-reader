@@ -10,9 +10,26 @@ type QueueEntry = {
 	attempt: number; // 0-indexed; max = config.numOfAttempts - 1
 };
 
+/** Default maximum number of retries running at once when no `concurrency` is given. */
+export const DEFAULT_RETRY_CONCURRENCY = 10;
+
+export type RetryQueueStats = {
+	/** Retries waiting on their backoff timer. */
+	scheduled: number;
+	/** Retries whose delay elapsed, waiting for a free concurrency slot (FIFO). */
+	queued: number;
+	/** Retries currently running `processor.processInserts`. */
+	inFlight: number;
+};
+
 export class RetryQueue {
 	private stopped = false;
-	private pendingTimers: ReturnType<typeof setTimeout>[] = [];
+	private readonly pendingTimers = new Set<ReturnType<typeof setTimeout>>();
+	/** FIFO of due retries; `readyHead` is the index of the next entry to start (O(1) dequeue). */
+	private ready: QueueEntry[] = [];
+	private readyHead = 0;
+	private inFlight = 0;
+	private readonly concurrency: number;
 
 	constructor(
 		private readonly deps: {
@@ -23,27 +40,85 @@ export class RetryQueue {
 			config: RetryConfig;
 			/** Records whose attempts reach this value after the final retry are marked DEAD. */
 			maxAttempts: number;
+			/**
+			 * Maximum number of retries running at once (each one does a SELECT + publish + UPDATE and
+			 * competes with the WAL flow for the pg pool). Due retries beyond it wait in a FIFO.
+			 * Integer >= 1, default {@link DEFAULT_RETRY_CONCURRENCY}.
+			 */
+			concurrency?: number;
 		},
-	) {}
+	) {
+		const concurrency = deps.concurrency ?? DEFAULT_RETRY_CONCURRENCY;
+		if (!Number.isInteger(concurrency) || concurrency < 1) {
+			throw new RangeError(`RetryQueue concurrency must be an integer >= 1, received ${concurrency}`);
+		}
+		this.concurrency = concurrency;
+	}
 
 	enqueue(record: OutboxRecord): void {
+		if (this.stopped) {
+			this.deps.logger.warn({
+				message: `Outbox record ${record.id} not enqueued for retry: retry queue is stopped`,
+				extra: { recordId: record.id },
+			});
+			return;
+		}
 		retryQueueSize.add(1);
 		this.schedule({ record, attempt: 0 });
 	}
 
+	/** Cancels pending timers and discards due-but-not-started retries. In-flight retries finish but are not rescheduled. */
 	stop(): void {
 		this.stopped = true;
+		const discarded = this.pendingTimers.size + (this.ready.length - this.readyHead);
 		for (const t of this.pendingTimers) clearTimeout(t);
-		this.pendingTimers = [];
+		this.pendingTimers.clear();
+		this.ready = [];
+		this.readyHead = 0;
+		if (discarded > 0) retryQueueSize.add(-discarded);
+	}
+
+	stats(): RetryQueueStats {
+		return {
+			scheduled: this.pendingTimers.size,
+			queued: this.ready.length - this.readyHead,
+			inFlight: this.inFlight,
+		};
 	}
 
 	private schedule(entry: QueueEntry): void {
+		if (this.stopped) {
+			retryQueueSize.add(-1);
+			return;
+		}
 		const delay = this.computeDelay(entry.attempt);
 		const timer = setTimeout(() => {
-			this.pendingTimers = this.pendingTimers.filter((t) => t !== timer);
-			if (!this.stopped) this.run(entry);
+			this.pendingTimers.delete(timer);
+			if (this.stopped) return;
+			this.ready.push(entry);
+			this.drain();
 		}, delay);
-		this.pendingTimers.push(timer);
+		this.pendingTimers.add(timer);
+	}
+
+	/** Starts due retries while concurrency slots are free. */
+	private drain(): void {
+		while (!this.stopped && this.inFlight < this.concurrency && this.readyHead < this.ready.length) {
+			const entry = this.ready[this.readyHead] as QueueEntry;
+			this.readyHead++;
+			if (this.readyHead === this.ready.length) {
+				this.ready = [];
+				this.readyHead = 0;
+			} else if (this.readyHead > 1024 && this.readyHead * 2 > this.ready.length) {
+				this.ready = this.ready.slice(this.readyHead);
+				this.readyHead = 0;
+			}
+			this.inFlight++;
+			void this.run(entry).finally(() => {
+				this.inFlight--;
+				this.drain();
+			});
+		}
 	}
 
 	private async run(entry: QueueEntry): Promise<void> {
