@@ -1,6 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
-import { LogicalReplicationService, type Wal2Json } from "pg-logical-replication";
-import { buildReplicationConnectionString, startReplication } from "../src/replication";
+import type { Client } from "pg";
+import { LogicalReplicationService, type Wal2Json, type Wal2JsonPlugin } from "pg-logical-replication";
+import {
+	buildReplicationConnectionString,
+	buildWal2JsonOptions,
+	escapeWal2JsonTableName,
+	startReplication,
+} from "../src/replication";
+import { applyNamingToTableName } from "../src/utils/column-naming";
 
 // The real LogicalReplicationService is used so that the library's own event
 // dispatch (`emitAsync`, used by its flowControl queue) is exercised. Only the
@@ -147,5 +154,105 @@ describe("startReplication", () => {
 
 		expect(onError).toHaveBeenCalledTimes(1);
 		expect(onError).toHaveBeenCalledWith(failure);
+	});
+});
+
+describe("escapeWal2JsonTableName", () => {
+	it("returns a plain name unchanged", () => {
+		expect(escapeWal2JsonTableName("outbox")).toBe("outbox");
+		expect(escapeWal2JsonTableName("outbox_events")).toBe("outbox_events");
+	});
+
+	it("escapes wal2json special characters with a backslash", () => {
+		expect(escapeWal2JsonTableName("my.outbox")).toBe("my\\.outbox");
+		expect(escapeWal2JsonTableName("a,b")).toBe("a\\,b");
+		expect(escapeWal2JsonTableName("Foo bar")).toBe("Foo\\ bar");
+		expect(escapeWal2JsonTableName("out*box")).toBe("out\\*box");
+		expect(escapeWal2JsonTableName("back\\slash")).toBe("back\\\\slash");
+	});
+
+	it("escapes a single quote for wal2json and doubles it for the SQL string literal", () => {
+		expect(escapeWal2JsonTableName("o'box")).toBe("o\\''box");
+	});
+
+	it("keeps the case of camelCase and PascalCase table names", () => {
+		expect(escapeWal2JsonTableName(applyNamingToTableName("outbox_events", "camelCase"))).toBe("outboxEvents");
+		expect(escapeWal2JsonTableName(applyNamingToTableName("outbox_events", "PascalCase"))).toBe("OutboxEvents");
+	});
+});
+
+describe("buildWal2JsonOptions", () => {
+	it("restricts the stream to inserts on the table in any schema and drops column types", () => {
+		expect(buildWal2JsonOptions("outbox")).toEqual({
+			addTables: "*.outbox",
+			actions: "insert",
+			includeTypes: false,
+		});
+	});
+
+	it("escapes the table name inside add-tables", () => {
+		expect(buildWal2JsonOptions("my.outbox").addTables).toBe("*.my\\.outbox");
+	});
+});
+
+describe("startReplication wal2json plugin", () => {
+	let subscribeSpy: ReturnType<typeof spyOn>;
+	let service: LogicalReplicationService | undefined;
+
+	const subscribedPlugin = () => subscribeSpy.mock.calls[0][0] as Wal2JsonPlugin;
+
+	const renderStartSql = async (plugin: Wal2JsonPlugin) => {
+		const query = mock(async (_sql: string) => ({}));
+		await plugin.start({ query } as unknown as Client, "outbox_slot", "0/0");
+		return query.mock.calls[0][0];
+	};
+
+	beforeEach(() => {
+		subscribeSpy = spyOn(LogicalReplicationService.prototype, "subscribe").mockResolvedValue(undefined as never);
+	});
+
+	afterEach(() => {
+		service?.removeAllListeners();
+		service = undefined;
+		subscribeSpy.mockRestore();
+	});
+
+	it("filters the stream to inserts on the outbox table when tableName is given", async () => {
+		service = await startReplication({
+			connectionString: "postgres://localhost/db",
+			slotName: "outbox_slot",
+			tableName: "outbox",
+			onChange: async () => {},
+		});
+
+		const plugin = subscribedPlugin();
+		expect(plugin.name).toBe("wal2json");
+		expect(plugin.options).toEqual({ addTables: "*.outbox", actions: "insert", includeTypes: false });
+		expect(await renderStartSql(plugin)).toBe(
+			`START_REPLICATION SLOT "outbox_slot" LOGICAL 0/0 ("add-tables" '*.outbox' , "actions" 'insert' , "include-types" 'off')`,
+		);
+	});
+
+	it("renders an escaped physical table name (PascalCase) in the START_REPLICATION options", async () => {
+		service = await startReplication({
+			connectionString: "postgres://localhost/db",
+			slotName: "outbox_slot",
+			tableName: applyNamingToTableName("outbox_events", "PascalCase"),
+			onChange: async () => {},
+		});
+
+		expect(await renderStartSql(subscribedPlugin())).toContain(`"add-tables" '*.OutboxEvents'`);
+	});
+
+	it("keeps the unfiltered default plugin when tableName is omitted (backwards compatible)", async () => {
+		service = await startReplication({
+			connectionString: "postgres://localhost/db",
+			slotName: "outbox_slot",
+			onChange: async () => {},
+		});
+
+		const plugin = subscribedPlugin();
+		expect(plugin.options).toEqual({});
+		expect(await renderStartSql(plugin)).toBe(`START_REPLICATION SLOT "outbox_slot" LOGICAL 0/0`);
 	});
 });
