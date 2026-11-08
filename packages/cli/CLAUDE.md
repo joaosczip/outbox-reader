@@ -62,6 +62,10 @@ src/
 - **`SequelizeMigrationAdapter`** (`src/services/sequelize-migration-adapter.ts`): Generates a Sequelize migration file for the outbox table.
 - **`ReplicationSetup`** (`src/services/replication-setup.ts`): Creates a PostgreSQL logical replication slot and publication via `pg`.
 
+## Outbox Indexes
+
+All generators (SQL, Sequelize, Prisma) emit the same two partial indexes, named `idx_<table>_pending_created_at` and `idx_<table>_failed_created_at`, on `created_at` `WHERE status = 'PENDING'` / `'FAILED'`. Do not reintroduce indexes on `status`, `sequence_number` or a plain `created_at`: each one adds an index write to every processed event. The Prisma model uses `@@index(..., where: ...)`, which needs Prisma >= 7.4 with the `partialIndexes` preview feature (the generator enables it). The manual migration for existing tables is in `README.md` ("Outbox indexes").
+
 ## CLI Binary
 
 The `outy` binary (`bin/outy.js`) wraps `src/cli/index.ts`. Commands:

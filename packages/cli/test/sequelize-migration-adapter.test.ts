@@ -219,6 +219,50 @@ describe("SequelizeMigrationAdapter", () => {
 		});
 	});
 
+	describe("createMigration - indexes", () => {
+		const cases = [
+			{ naming: "snake_case", table: "outbox", createdAt: "created_at", sequenceNumber: "sequence_number" },
+			{ naming: "camelCase", table: "outbox", createdAt: "createdAt", sequenceNumber: "sequenceNumber" },
+			{ naming: "PascalCase", table: "Outbox", createdAt: "CreatedAt", sequenceNumber: "SequenceNumber" },
+		] as const;
+
+		for (const { naming, table, createdAt, sequenceNumber } of cases) {
+			it(`adds only named partial created_at indexes for PENDING and FAILED (${naming})`, async () => {
+				const { adapter, writtenFiles } = makeAdapter();
+
+				await adapter.createMigration({ target: "sequelize", columnNaming: naming });
+
+				const { content } = writtenFiles[0];
+				expect(content).toContain(
+					`await queryInterface.addIndex("${table}", ["${createdAt}"], {
+      name: "idx_${table}_pending_created_at",
+      where: { status: "PENDING" },
+    });`,
+				);
+				expect(content).toContain(
+					`await queryInterface.addIndex("${table}", ["${createdAt}"], {
+      name: "idx_${table}_failed_created_at",
+      where: { status: "FAILED" },
+    });`,
+				);
+				// Regression: the status, sequence_number and unfiltered created_at indexes must be gone.
+				expect(content.match(/addIndex\(/g)).toHaveLength(2);
+				expect(content).not.toContain('["status"]');
+				expect(content).not.toContain(`["${sequenceNumber}"]`);
+			});
+		}
+
+		it("derives partial index names from a custom table name", async () => {
+			const { adapter, writtenFiles } = makeAdapter();
+
+			await adapter.createMigration({ target: "sequelize", tableName: "my_outbox", columnNaming: "camelCase" });
+
+			const { content } = writtenFiles[0];
+			expect(content).toContain('name: "idx_myOutbox_pending_created_at"');
+			expect(content).toContain('name: "idx_myOutbox_failed_created_at"');
+		});
+	});
+
 	describe("createMigration - custom table name", () => {
 		it("uses the provided table name in the migration", async () => {
 			const { adapter, writtenFiles } = makeAdapter();

@@ -3,6 +3,43 @@ import * as path from "node:path";
 import type { OutboxSchemaGenerationOptions, SchemaGenerationConfig } from "../types/schema-config";
 import { type ColumnNaming, applyNamingToTableName, getColumnNames } from "../utils/column-naming";
 
+/**
+ * Prisma preview feature (Prisma ORM >= 7.4) required for `@@index(..., where: ...)`,
+ * which the outbox model uses for its partial indexes.
+ */
+const PARTIAL_INDEXES_FEATURE = "partialIndexes";
+
+/**
+ * Enables the `partialIndexes` preview feature in the first `generator` block of a schema.
+ * Returns the schema unchanged when the feature is already enabled or no generator exists.
+ */
+export function enablePartialIndexesPreviewFeature(schemaContent: string): string {
+	const generatorMatch = /generator\s+\w+\s*\{[^}]*\}/.exec(schemaContent);
+	if (!generatorMatch) {
+		return schemaContent;
+	}
+
+	const block = generatorMatch[0];
+	if (block.includes(`"${PARTIAL_INDEXES_FEATURE}"`)) {
+		return schemaContent;
+	}
+
+	const previewFeaturesRegex = /(previewFeatures\s*=\s*\[)([^\]]*)\]/;
+	const updatedBlock = previewFeaturesRegex.test(block)
+		? block.replace(previewFeaturesRegex, (_match, prefix: string, features: string) => {
+				const existing = features.trim();
+				const list = existing ? `${existing}, "${PARTIAL_INDEXES_FEATURE}"` : `"${PARTIAL_INDEXES_FEATURE}"`;
+				return `${prefix}${list}]`;
+			})
+		: block.replace(/\n?\s*\}$/, `\n  previewFeatures = ["${PARTIAL_INDEXES_FEATURE}"]\n}`);
+
+	return (
+		schemaContent.slice(0, generatorMatch.index) +
+		updatedBlock +
+		schemaContent.slice(generatorMatch.index + block.length)
+	);
+}
+
 export class PrismaSchemaGenerator {
 	private config: Required<SchemaGenerationConfig>;
 
@@ -67,23 +104,24 @@ export class PrismaSchemaGenerator {
   ${allFields.join("\n  ")}
 
   @@map("${dbTableName}")
-  @@index([status])
-  @@index([createdAt])
-  @@index([sequenceNumber])
+  @@index([createdAt], map: "idx_${dbTableName}_pending_created_at", where: { status: "PENDING" })
+  @@index([createdAt], map: "idx_${dbTableName}_failed_created_at", where: { status: "FAILED" })
 }`;
 	}
 
 	private getBaseSchema(): string {
 		return `// This is your Prisma schema file,
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
+// Requires Prisma ORM >= 7.4 ("partialIndexes" preview feature). The connection URL is
+// configured in prisma.config.ts: https://pris.ly/d/config-datasource
 
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["${PARTIAL_INDEXES_FEATURE}"]
 }
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
 `;
@@ -106,7 +144,13 @@ datasource db {
 				return;
 			}
 
-			const updatedContent = `${existingContent}\n${outboxModel}\n`;
+			const withPreviewFeature = enablePartialIndexesPreviewFeature(existingContent);
+			if (!withPreviewFeature.includes(`"${PARTIAL_INDEXES_FEATURE}"`)) {
+				console.warn(
+					`⚠️  No generator block found in ${this.config.schemaPath}: enable the "${PARTIAL_INDEXES_FEATURE}" preview feature (Prisma >= 7.4) for the outbox partial indexes`,
+				);
+			}
+			const updatedContent = `${withPreviewFeature}\n${outboxModel}\n`;
 			await Bun.write(this.config.schemaPath, updatedContent);
 			console.log(`✅ Added ${this.config.modelName} model to existing schema at ${this.config.schemaPath}`);
 		} else {

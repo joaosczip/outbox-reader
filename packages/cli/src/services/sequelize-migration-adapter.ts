@@ -123,9 +123,15 @@ module.exports = {
       },
     });
 
-    await queryInterface.addIndex("${tableName}", ["${cols.status}"]);
-    await queryInterface.addIndex("${tableName}", ["${cols.createdAt}"]);
-    await queryInterface.addIndex("${tableName}", ["${cols.sequenceNumber}"]);
+    // Partial indexes for the only status-based reads (FAILED reprocessing, stale PENDING sweep).
+    await queryInterface.addIndex("${tableName}", ["${cols.createdAt}"], {
+      name: "idx_${tableName}_pending_created_at",
+      where: { ${cols.status}: "PENDING" },
+    });
+    await queryInterface.addIndex("${tableName}", ["${cols.createdAt}"], {
+      name: "idx_${tableName}_failed_created_at",
+      where: { ${cols.status}: "FAILED" },
+    });
   },
 
   async down(queryInterface) {
