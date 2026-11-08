@@ -148,6 +148,7 @@ model User {
 		expect(content).toContain('@map("SequenceNumber")');
 		expect(content).toContain('@map("CreatedAt")');
 		expect(content).toContain('@map("ProcessedAt")');
+		expect(content).toContain('@map("RequeuedAt")');
 		expect(content).toContain('@@map("Outbox")');
 	});
 
@@ -197,7 +198,7 @@ model User {
 		] as const;
 
 		for (const { naming, table } of cases) {
-			it(`declares only partial createdAt indexes for PENDING and FAILED (${naming})`, async () => {
+			it(`declares partial indexes for pending, failed, order and retention (${naming})`, async () => {
 				const generator = new PrismaSchemaGenerator({
 					config: { schemaPath: testSchemaPath, generateMigration: false, columnNaming: naming },
 				});
@@ -211,11 +212,24 @@ model User {
 				expect(content).toContain(
 					`@@index([createdAt], map: "idx_${table}_failed_created_at", where: { status: "FAILED" })`,
 				);
+				expect(content).toContain(
+					`@@index([aggregateId, createdAt, id], map: "idx_${table}_pending_aggregate_order", where: { status: "PENDING" })`,
+				);
+				expect(content).toContain(
+					`@@index([aggregateId, createdAt, id], map: "idx_${table}_failed_aggregate_order", where: { status: "FAILED" })`,
+				);
+				expect(content).toContain(
+					`@@index([processedAt], map: "idx_${table}_processed_processed_at", where: { status: "PROCESSED" })`,
+				);
+				expect(content).toContain(
+					`@@index([createdAt], map: "idx_${table}_dead_created_at", where: { status: "DEAD" })`,
+				);
 				// Regression: the status, sequenceNumber and unfiltered createdAt indexes must be gone.
-				expect(content.match(/@@index\(/g)).toHaveLength(2);
+				expect(content.match(/@@index\(/g)).toHaveLength(6);
 				expect(content).not.toContain("@@index([status])");
 				expect(content).not.toContain("@@index([sequenceNumber])");
 				expect(content).not.toContain("@@index([createdAt])");
+				expect(content).not.toContain("@@index([processedAt])");
 			});
 		}
 
@@ -234,6 +248,14 @@ model User {
 			const content = fs.readFileSync(testSchemaPath, "utf-8");
 			expect(content).toContain('map: "idx_MyOutbox_pending_created_at"');
 			expect(content).toContain('map: "idx_MyOutbox_failed_created_at"');
+			expect(content).toContain('map: "idx_MyOutbox_pending_aggregate_order"');
+			expect(content).toContain('map: "idx_MyOutbox_failed_aggregate_order"');
+			expect(content).toContain(
+				'@@index([processedAt], map: "idx_MyOutbox_processed_processed_at", where: { status: "PROCESSED" })',
+			);
+			expect(content).toContain(
+				'@@index([createdAt], map: "idx_MyOutbox_dead_created_at", where: { status: "DEAD" })',
+			);
 		});
 
 		it("enables the partialIndexes preview feature in a new schema file", async () => {

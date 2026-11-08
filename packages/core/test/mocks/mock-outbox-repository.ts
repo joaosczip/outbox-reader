@@ -8,10 +8,20 @@ export class MockOutboxRepository {
 	public markAsFailedCalls: Array<{ id: string; attempts: number }> = [];
 	public findStalePendingEventsCalls: Array<{ olderThanMinutes: number; limit: number }> = [];
 	public markAsDeadCalls: Array<{ id: string; attempts: number; countAttempt?: boolean }> = [];
+	public hasOlderPendingOrFailedCalls: OutboxRecord[] = [];
+	public findNextReadyPendingCalls: string[] = [];
 	/** Return values of the optimistic-lock writes; set to false to simulate a lock miss. */
 	public markAsProcessedResult = true;
 	public markAsFailedResult = true;
 	public markAsDeadResult = true;
+	/**
+	 * When false (the default), `hasOlderPendingOrFailed` returns false and `findNextReadyPending`
+	 * returns null so tests that do not care about aggregate order stay unchanged.
+	 * When true, both use the in-memory records and `(createdAt, id)` order. DEAD does not block.
+	 */
+	public enforceAggregateOrder = false;
+	/** Used when `enforceAggregateOrder` is false. */
+	public hasOlderPendingOrFailedResult = false;
 
 	async findUnprocessedById(id: string): Promise<OutboxRecord | null> {
 		this.findUnprocessedByIdCalls.push(id);
@@ -74,6 +84,33 @@ export class MockOutboxRepository {
 			if (countAttempt) record.attempts = attempts + 1;
 		}
 		return true;
+	}
+
+	async hasOlderPendingOrFailed(record: OutboxRecord): Promise<boolean> {
+		this.hasOlderPendingOrFailedCalls.push(record);
+		if (!this.enforceAggregateOrder) return this.hasOlderPendingOrFailedResult;
+		return this.isOlderBlocking(record);
+	}
+
+	async findNextReadyPending(aggregateId: string): Promise<OutboxRecord | null> {
+		this.findNextReadyPendingCalls.push(aggregateId);
+		if (!this.enforceAggregateOrder) return null;
+		const pending = [...this.records.values()]
+			.filter((record) => record.aggregateId === aggregateId && record.status === OutboxStatus.PENDING)
+			.sort((a, b) => compareOrder(a, b));
+		const oldest = pending[0];
+		if (!oldest || this.isOlderBlocking(oldest)) return null;
+		return oldest;
+	}
+
+	private isOlderBlocking(candidate: OutboxRecord): boolean {
+		for (const other of this.records.values()) {
+			if (other.id === candidate.id) continue;
+			if (other.aggregateId !== candidate.aggregateId) continue;
+			if (other.status !== OutboxStatus.PENDING && other.status !== OutboxStatus.FAILED) continue;
+			if (compareOrder(other, candidate) < 0) return true;
+		}
+		return false;
 	}
 
 	async markManyAsFailed(_params: { ids: string[] }): Promise<void> {
@@ -143,5 +180,15 @@ export class MockOutboxRepository {
 		this.markAsProcessedResult = true;
 		this.markAsFailedResult = true;
 		this.markAsDeadResult = true;
+		this.hasOlderPendingOrFailedCalls = [];
+		this.findNextReadyPendingCalls = [];
+		this.enforceAggregateOrder = false;
+		this.hasOlderPendingOrFailedResult = false;
 	}
 }
+
+const compareOrder = (a: OutboxRecord, b: OutboxRecord): number => {
+	const delta = (a.createdAt?.getTime() ?? 0) - (b.createdAt?.getTime() ?? 0);
+	if (delta !== 0) return delta;
+	return (a.id ?? "").localeCompare(b.id ?? "");
+};

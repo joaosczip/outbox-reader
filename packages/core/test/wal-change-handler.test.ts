@@ -4,6 +4,8 @@ import type { Logger } from "../src/logger";
 import { OutboxRecord, OutboxStatus } from "../src/models/outbox-record";
 import { OutboxProcessor } from "../src/outbox-processor";
 import type { OutboxRepository } from "../src/outbox-repository";
+import { RetryQueue } from "../src/retry-queue";
+import { AggregateSequencer } from "../src/utils/aggregate-sequencer";
 import { type WalChangeHandlerMetrics, createWalChangeHandler } from "../src/wal-change-handler";
 import { MockLogger } from "./mocks/mock-logger";
 import { MockOutboxRepository } from "./mocks/mock-outbox-repository";
@@ -94,6 +96,7 @@ describe("createWalChangeHandler", () => {
 	let retryQueue: FakeRetryQueue;
 	let logger: MockLogger;
 	let metrics: RecordingMetrics;
+	let processor: OutboxProcessor;
 	let handler: (log: Wal2Json.Output) => Promise<void>;
 
 	const seed = (specs: RecordSpec[]) => {
@@ -106,7 +109,7 @@ describe("createWalChangeHandler", () => {
 		retryQueue = new FakeRetryQueue();
 		logger = new MockLogger();
 		metrics = new RecordingMetrics();
-		const processor = new OutboxProcessor({
+		processor = new OutboxProcessor({
 			outboxRepository: repository as unknown as OutboxRepository,
 			logger: logger as unknown as Logger,
 			maxAttempts: 5,
@@ -208,19 +211,127 @@ describe("createWalChangeHandler", () => {
 		expect(repository.markAsProcessedCalls).toHaveLength(4);
 	});
 
-	it("continues an aggregate's later events after an earlier one of that aggregate fails", async () => {
+	it("does not publish later events of an aggregate when an earlier one fails", async () => {
 		const specs = [
 			{ id: "a1-e1", aggregateId: "a1" },
 			{ id: "a1-e2", aggregateId: "a1" },
+			{ id: "a2-e1", aggregateId: "a2" },
 		];
 		seed(specs);
 		publisher.failingIds.add("a1-e1");
 
 		await expect(handler(toWal(specs))).resolves.toBeUndefined();
 
-		expect(publisher.timeline).toEqual(["start:a1-e1", "end:a1-e1", "start:a1-e2", "end:a1-e2"]);
 		expect(retryQueue.enqueued.map((r) => r.id)).toEqual(["a1-e1"]);
-		expect(repository.markAsProcessedCalls.map((c) => c.id)).toEqual(["a1-e2"]);
+		expect(repository.getRecord("a1-e1")?.status).toBe(OutboxStatus.PENDING);
+		expect(repository.getRecord("a1-e2")?.status).toBe(OutboxStatus.PENDING);
+		expect(repository.markAsProcessedCalls.map((c) => c.id)).toEqual(["a2-e1"]);
+		expect(publisher.publishedRecords.map((r) => r.id)).toEqual(["a2-e1"]);
+		expect(publisher.timeline.some((event) => event.includes("a1-e2"))).toBe(false);
+	});
+
+	it("publishes the successor only after the failed head later succeeds", async () => {
+		const head = pendingRecord({ id: "a1-e1", aggregateId: "a1" });
+		head.createdAt = new Date("2020-01-01T00:00:00.000Z");
+		const tail = pendingRecord({ id: "a1-e2", aggregateId: "a1" });
+		tail.createdAt = new Date("2020-01-02T00:00:00.000Z");
+		repository.addRecord(head);
+		repository.addRecord(tail);
+		repository.enforceAggregateOrder = true;
+		publisher.failingIds.add("a1-e1");
+
+		const sequencer = new AggregateSequencer();
+		const queue = new RetryQueue({
+			processor,
+			publisher,
+			outboxRepository: repository as unknown as OutboxRepository,
+			logger: logger as unknown as Logger,
+			config: { jitter: "none", maxDelayInMs: 30, numOfAttempts: 3, startingDelayInMs: 30 },
+			maxAttempts: 5,
+			concurrency: 2,
+			sequencer,
+		});
+		const orderedHandler = createWalChangeHandler({
+			processor,
+			repository,
+			publisher,
+			retryQueue: queue,
+			logger,
+			concurrency: 4,
+			metrics,
+			sequencer,
+		});
+
+		try {
+			await orderedHandler(
+				toWal([
+					{ id: "a1-e1", aggregateId: "a1" },
+					{ id: "a1-e2", aggregateId: "a1" },
+				]),
+			);
+
+			expect(publisher.publishedRecords).toHaveLength(0);
+			expect(repository.getRecord("a1-e2")?.status).toBe(OutboxStatus.PENDING);
+			expect(queue.stats().scheduled).toBe(1);
+
+			publisher.failingIds.delete("a1-e1");
+			await Bun.sleep(120);
+
+			const headEnds = publisher.timeline.reduce<number[]>((indexes, event, index) => {
+				if (event === "end:a1-e1") indexes.push(index);
+				return indexes;
+			}, []);
+			expect(headEnds.length).toBeGreaterThanOrEqual(2);
+			expect(publisher.timeline.indexOf("start:a1-e2")).toBeGreaterThan(headEnds[1] as number);
+			expect(publisher.publishedRecords.map((r) => r.id)).toEqual(["a1-e1", "a1-e2"]);
+			expect(repository.getRecord("a1-e1")?.status).toBe(OutboxStatus.PROCESSED);
+			expect(repository.getRecord("a1-e2")?.status).toBe(OutboxStatus.PROCESSED);
+		} finally {
+			queue.stop();
+		}
+	});
+
+	it("publishes the successor after the head is marked DEAD and blocks on an older FAILED sibling", async () => {
+		repository.enforceAggregateOrder = true;
+		const head = pendingRecord({ id: "a1-e1", aggregateId: "a1" });
+		head.attempts = 5;
+		head.createdAt = new Date("2020-01-01T00:00:00.000Z");
+		const tail = pendingRecord({ id: "a1-e2", aggregateId: "a1" });
+		tail.createdAt = new Date("2020-01-02T00:00:00.000Z");
+		repository.addRecord(head);
+		repository.addRecord(tail);
+
+		await handler(
+			toWal([
+				{ id: "a1-e1", aggregateId: "a1" },
+				{ id: "a1-e2", aggregateId: "a1" },
+			]),
+		);
+
+		expect(repository.getRecord("a1-e1")?.status).toBe(OutboxStatus.DEAD);
+		expect(repository.getRecord("a1-e2")?.status).toBe(OutboxStatus.PROCESSED);
+		expect(publisher.publishedRecords.map((r) => r.id)).toEqual(["a1-e2"]);
+		expect(retryQueue.enqueued).toHaveLength(0);
+
+		repository.reset();
+		publisher.reset();
+		repository.enforceAggregateOrder = true;
+		const failedHead = pendingRecord({ id: "b1-e1", aggregateId: "b1" });
+		failedHead.status = OutboxStatus.FAILED;
+		failedHead.createdAt = new Date("2020-01-01T00:00:00.000Z");
+		const blockedTail = pendingRecord({ id: "b1-e2", aggregateId: "b1" });
+		blockedTail.createdAt = new Date("2020-01-02T00:00:00.000Z");
+		repository.addRecord(failedHead);
+		repository.addRecord(blockedTail);
+
+		const outcome = await processor.processInserts({ insertedRecord: blockedTail, publisher });
+
+		expect(outcome).toBe("blocked");
+		expect(publisher.publishCalls).toHaveLength(0);
+		expect(repository.markAsFailedCalls).toHaveLength(0);
+		expect(repository.markAsProcessedCalls).toHaveLength(0);
+		expect(repository.getRecord("b1-e2")?.status).toBe(OutboxStatus.PENDING);
+		expect(repository.getRecord("b1-e1")?.status).toBe(OutboxStatus.FAILED);
 	});
 
 	it("prefetches all outbox ids of the batch in a single query", async () => {
@@ -254,5 +365,44 @@ describe("createWalChangeHandler", () => {
 		expect(retryQueue.enqueued).toHaveLength(0);
 		expect(metrics.walEvents).toBe(1);
 		expect(metrics.filtered).toEqual([0]);
+	});
+});
+
+describe("AggregateSequencer", () => {
+	it("rejects re-entry for the same aggregate from inside a running task", async () => {
+		const sequencer = new AggregateSequencer();
+
+		await expect(
+			sequencer.run("agg-1", async () => {
+				await sequencer.run("agg-1", async () => undefined);
+			}),
+		).rejects.toThrow(/cannot be re-entered/);
+	});
+
+	it("runs one aggregate at a time and overlaps different aggregates", async () => {
+		const sequencer = new AggregateSequencer();
+		const events: string[] = [];
+		let releaseA: () => void = () => {};
+		const gate = new Promise<void>((resolve) => {
+			releaseA = resolve;
+		});
+
+		const first = sequencer.run("a", async () => {
+			events.push("start:a");
+			await gate;
+			events.push("end:a");
+		});
+		const second = sequencer.run("a", async () => {
+			events.push("start:a2");
+		});
+		const other = sequencer.run("b", async () => {
+			events.push("start:b");
+		});
+
+		await other;
+		expect(events).toEqual(["start:a", "start:b"]);
+		releaseA();
+		await Promise.all([first, second]);
+		expect(events).toEqual(["start:a", "start:b", "end:a", "start:a2"]);
 	});
 });

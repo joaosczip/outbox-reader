@@ -261,7 +261,7 @@ describe("OutboxProcessor", () => {
 
 				await expect(
 					processor.processInserts({ insertedRecord: record, publisher: mockPublisher }),
-				).resolves.toBeUndefined();
+				).resolves.toBe("lock_miss");
 
 				expect(mockPublisher.publishedRecords).toHaveLength(1);
 				expect(mockRepository.markAsProcessedCalls).toEqual([
@@ -276,6 +276,48 @@ describe("OutboxProcessor", () => {
 						extra: { recordId: "lock-miss-id", attempts: 1, sequenceNumber: 99 },
 					}),
 				);
+			});
+
+			it("returns blocked and does not publish when an older PENDING or FAILED sibling exists", async () => {
+				const record = new OutboxRecord({
+					id: "blocked-id",
+					aggregateId: "user-450",
+					aggregateType: "User",
+					eventType: "user.created",
+					payload: {},
+					status: OutboxStatus.PENDING,
+					attempts: 0,
+				});
+				mockRepository.addRecord(record);
+				mockRepository.hasOlderPendingOrFailedResult = true;
+
+				const outcome = await processor.processInserts({ insertedRecord: record, publisher: mockPublisher });
+
+				expect(outcome).toBe("blocked");
+				expect(mockPublisher.publishedRecords).toHaveLength(0);
+				expect(mockRepository.markAsProcessedCalls).toHaveLength(0);
+				expect(mockRepository.markAsFailedCalls).toHaveLength(0);
+				expect(mockRepository.markAsDeadCalls).toHaveLength(0);
+				expect(mockRepository.getRecord("blocked-id")?.status).toBe(OutboxStatus.PENDING);
+			});
+
+			it("returns dead when a max-attempts record is marked DEAD", async () => {
+				const record = new OutboxRecord({
+					id: "dead-result-id",
+					aggregateId: "user-451",
+					aggregateType: "User",
+					eventType: "user.created",
+					payload: {},
+					status: OutboxStatus.PENDING,
+					attempts: 3,
+				});
+				mockRepository.addRecord(record);
+
+				const outcome = await processor.processInserts({ insertedRecord: record, publisher: mockPublisher });
+
+				expect(outcome).toBe("dead");
+				expect(mockPublisher.publishedRecords).toHaveLength(0);
+				expect(mockRepository.getRecord("dead-result-id")?.status).toBe(OutboxStatus.DEAD);
 			});
 
 			it("should allow processing when attempts are below maximum", async () => {

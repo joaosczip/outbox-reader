@@ -9,6 +9,7 @@ export interface OutboxColumnNames {
 	sequenceNumber: string;
 	createdAt: string;
 	processedAt: string;
+	requeuedAt: string;
 	status: string;
 	attempts: string;
 }
@@ -23,6 +24,7 @@ const COLUMN_NAMES: Record<ColumnNaming, OutboxColumnNames> = {
 		sequenceNumber: "sequence_number",
 		createdAt: "created_at",
 		processedAt: "processed_at",
+		requeuedAt: "requeued_at",
 		status: "status",
 		attempts: "attempts",
 	},
@@ -35,6 +37,7 @@ const COLUMN_NAMES: Record<ColumnNaming, OutboxColumnNames> = {
 		sequenceNumber: "sequenceNumber",
 		createdAt: "createdAt",
 		processedAt: "processedAt",
+		requeuedAt: "requeuedAt",
 		status: "status",
 		attempts: "attempts",
 	},
@@ -47,6 +50,7 @@ const COLUMN_NAMES: Record<ColumnNaming, OutboxColumnNames> = {
 		sequenceNumber: "SequenceNumber",
 		createdAt: "CreatedAt",
 		processedAt: "ProcessedAt",
+		requeuedAt: "RequeuedAt",
 		status: "status",
 		attempts: "attempts",
 	},

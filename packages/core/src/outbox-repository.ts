@@ -122,7 +122,7 @@ export class OutboxRepository {
 			       ${c.createdAt}, ${c.processedAt}, ${c.status}, ${c.attempts}
 			FROM ${this.tableName}
 			WHERE ${c.status} = 'FAILED'
-			ORDER BY ${c.createdAt} ASC
+			ORDER BY ${c.createdAt} ASC, ${c.id} ASC
 			LIMIT $1
 		`;
 		const result = await this.pool.query(query, [limit]);
@@ -133,6 +133,11 @@ export class OutboxRepository {
 	 * PENDING records created more than `olderThanMinutes` ago (oldest first), i.e. events
 	 * the main service most likely lost (crash, lost in-memory retry, acked-but-unprocessed WAL).
 	 * The cutoff is computed by the database clock to avoid app/DB clock skew.
+	 *
+	 * `created_at` stays the leading range predicate so the partial index
+	 * `(created_at) WHERE status = 'PENDING'` can be used. A row requeued recently
+	 * (old `created_at`, fresh `requeued_at`) is not stale; a never-requeued old PENDING row is.
+	 * Do not replace the predicate with `COALESCE(requeued_at, created_at)`.
 	 */
 	async findStalePendingEvents({
 		olderThanMinutes,
@@ -146,12 +151,68 @@ export class OutboxRepository {
 			SELECT ${c.id}, ${c.aggregateId}, ${c.aggregateType}, ${c.eventType}, ${c.payload}, ${c.sequenceNumber},
 			       ${c.createdAt}, ${c.processedAt}, ${c.status}, ${c.attempts}
 			FROM ${this.tableName}
-			WHERE ${c.status} = 'PENDING' AND ${c.createdAt} < NOW() - make_interval(mins => $1::int)
-			ORDER BY ${c.createdAt} ASC
+			WHERE ${c.status} = 'PENDING'
+			  AND ${c.createdAt} < NOW() - make_interval(mins => $1::int)
+			  AND (${c.requeuedAt} IS NULL OR ${c.requeuedAt} < NOW() - make_interval(mins => $1::int))
+			ORDER BY ${c.createdAt} ASC, ${c.id} ASC
 			LIMIT $2
 		`;
 		const result = await this.pool.query(query, [olderThanMinutes, limit]);
 		return result.rows.map((row: OutboxRow) => this.rowToRecord(row));
+	}
+
+	/**
+	 * True when an older sibling of the same aggregate is still PENDING or FAILED.
+	 *
+	 * DEAD is terminal and does not block: it is not part of either branch. The two
+	 * `status = '...'` branches are unioned (not `status = ANY(...)` / `IN (...)`) so each
+	 * can use its partial index on `(aggregate_id, created_at, id)`. The row comparison
+	 * excludes the record itself. Order key is the immutable `(created_at, id)`.
+	 */
+	async hasOlderPendingOrFailed(record: OutboxRecord): Promise<boolean> {
+		const c = this.qcols;
+		const olderThan = `(${c.createdAt}, ${c.id}) < ($2::timestamp, $3::uuid)`;
+		const query = `
+			SELECT 1
+			FROM (
+				SELECT 1
+				FROM ${this.tableName}
+				WHERE ${c.status} = 'PENDING'
+				  AND ${c.aggregateId} = $1
+				  AND ${olderThan}
+				UNION ALL
+				SELECT 1
+				FROM ${this.tableName}
+				WHERE ${c.status} = 'FAILED'
+				  AND ${c.aggregateId} = $1
+				  AND ${olderThan}
+			) AS older
+			LIMIT 1
+		`;
+		const result = await this.pool.query(query, [record.aggregateId, record.createdAt, record.id]);
+		return result.rows.length > 0;
+	}
+
+	/**
+	 * Oldest PENDING row of the aggregate that has no older PENDING or FAILED sibling,
+	 * or null when the oldest PENDING row is still blocked (or there is none).
+	 */
+	async findNextReadyPending(aggregateId: string): Promise<OutboxRecord | null> {
+		const c = this.qcols;
+		const query = `
+			SELECT ${c.id}, ${c.aggregateId}, ${c.aggregateType}, ${c.eventType}, ${c.payload}, ${c.sequenceNumber},
+			       ${c.createdAt}, ${c.processedAt}, ${c.status}, ${c.attempts}
+			FROM ${this.tableName}
+			WHERE ${c.status} = 'PENDING' AND ${c.aggregateId} = $1
+			ORDER BY ${c.createdAt} ASC, ${c.id} ASC
+			LIMIT 1
+		`;
+		const result = await this.pool.query(query, [aggregateId]);
+		const row: OutboxRow | undefined = result.rows[0];
+		if (!row) return null;
+		const oldest = this.rowToRecord(row);
+		if (await this.hasOlderPendingOrFailed(oldest)) return null;
+		return oldest;
 	}
 
 	async create(params: CreateOutboxRecordParams): Promise<string> {
@@ -310,15 +371,33 @@ export class OutboxRepository {
 	}
 
 	/**
-	 * Retention purge: deletes ONE bounded batch (at most `limit` rows) of terminal records
-	 * (PROCESSED/DEAD only) older than `olderThanDays`, and returns how many were deleted.
-	 * Callers loop until a batch deletes fewer than `limit`, which keeps each transaction and
-	 * its row locks short. The cutoff uses the database clock (no app/DB clock skew).
+	 * Retention purge: deletes one bounded batch of terminal records (PROCESSED/DEAD only)
+	 * older than `olderThanDays`, and returns how many rows this call deleted. Callers loop
+	 * until a batch deletes fewer than `limit`. The cutoff is the database clock,
+	 * `NOW() - make_interval(days => $1::int)`.
 	 *
-	 * Age is `COALESCE(processed_at, created_at)`: PROCESSED rows always have `processed_at`,
-	 * DEAD rows usually do not (they never published), so their creation time is used. The
-	 * extra `created_at < cutoff` predicate is redundant (`processed_at >= created_at`) but
-	 * lets the planner range-scan the existing `created_at` index instead of the whole table.
+	 * A row is deleted only when all of these hold: status is PROCESSED or DEAD (never
+	 * PENDING or FAILED), `created_at < cutoff`, and `COALESCE(processed_at, created_at) < cutoff`.
+	 * Each statement embeds one status as a SQL literal so the planner can match a partial
+	 * index. `status = ANY($1)` is not used. Rows are deleted by `ctid = ANY (ARRAY(SELECT ctid ...))`.
+	 * On PostgreSQL 16 a generic plan of `id IN (SELECT id ...)` sequential-scans the outer
+	 * table; the ctid form is an index scan of the batch plus a tid scan. When `statuses`
+	 * lists more than one, each status runs to completion with its own `limit` and the return
+	 * value is the sum of the statements.
+	 *
+	 * PROCESSED uses two statements that share `limit`:
+	 * 1. Hot path, written for partial index `idx_<table>_processed_processed_at` on
+	 *    `(processed_at) WHERE status = 'PROCESSED'`: `processed_at IS NOT NULL AND
+	 *    processed_at < cutoff AND created_at < cutoff`, ordered by `processed_at`.
+	 * 2. Only when statement 1 deleted fewer than `limit` (remaining = `limit - deleted`).
+	 *    Null `processed_at` keeps the COALESCE fallback (`status = 'PROCESSED' AND
+	 *    processed_at IS NULL AND created_at < cutoff`), ordered by `created_at`. That case
+	 *    is rare and has no dedicated index, so the statement may scan.
+	 *
+	 * DEAD is one statement, written for partial index `idx_<table>_dead_created_at` on
+	 * `(created_at) WHERE status = 'DEAD'`: `created_at < cutoff AND
+	 * COALESCE(processed_at, created_at) < cutoff`, ordered by `created_at`. `COALESCE` is a
+	 * residual filter; the `created_at` range matches the partial index.
 	 */
 	async deleteProcessedBefore({
 		olderThanDays,
@@ -345,29 +424,93 @@ export class OutboxRepository {
 		}
 		if (statuses.length === 0) return 0;
 
-		const c = this.qcols;
-		const cutoff = "NOW() - make_interval(days => $2::int)";
+		let deleted = 0;
+		for (const status of statuses) {
+			deleted +=
+				status === "PROCESSED"
+					? await this.deleteProcessedBatch(olderThanDays, limit)
+					: await this.deleteDeadBatch(olderThanDays, limit);
+		}
+		return deleted;
+	}
+
+	/** `NOW() - make_interval(days => $1::int)`. `$2` is the batch limit. */
+	private purgeCutoffSql(): string {
+		return "NOW() - make_interval(days => $1::int)";
+	}
+
+	private async deleteBySubquery(whereOrderLimit: string, olderThanDays: number, limit: number): Promise<number> {
 		const query = `
 			DELETE FROM ${this.tableName}
-			WHERE ${c.id} IN (
-				SELECT ${c.id} FROM ${this.tableName}
-				WHERE ${c.status} = ANY($1)
-				  AND ${c.createdAt} < ${cutoff}
-				  AND COALESCE(${c.processedAt}, ${c.createdAt}) < ${cutoff}
-				LIMIT $3
-			)
+			WHERE ctid = ANY (ARRAY(
+				SELECT ctid FROM ${this.tableName}
+				${whereOrderLimit}
+			))
 		`;
-		const result = await this.pool.query(query, [[...statuses], olderThanDays, limit]);
+		const result = await this.pool.query(query, [olderThanDays, limit]);
 		return result.rowCount ?? 0;
 	}
 
 	/**
+	 * PROCESSED batch. Statement 1 is written for `idx_<table>_processed_processed_at`
+	 * (`(processed_at) WHERE status = 'PROCESSED'`). Statement 2 runs only for a short batch
+	 * and covers `processed_at IS NULL` (age falls back to `created_at`). It has no index of its
+	 * own and may scan.
+	 */
+	private async deleteProcessedBatch(olderThanDays: number, limit: number): Promise<number> {
+		const c = this.qcols;
+		const cutoff = this.purgeCutoffSql();
+		const deleted = await this.deleteBySubquery(
+			`WHERE ${c.status} = 'PROCESSED'
+				  AND ${c.processedAt} IS NOT NULL
+				  AND ${c.processedAt} < ${cutoff}
+				  AND ${c.createdAt} < ${cutoff}
+				ORDER BY ${c.processedAt} ASC
+				LIMIT $2`,
+			olderThanDays,
+			limit,
+		);
+		if (deleted >= limit) return deleted;
+
+		const fallback = await this.deleteBySubquery(
+			`WHERE ${c.status} = 'PROCESSED'
+				  AND ${c.processedAt} IS NULL
+				  AND ${c.createdAt} < ${cutoff}
+				ORDER BY ${c.createdAt} ASC
+				LIMIT $2`,
+			olderThanDays,
+			limit - deleted,
+		);
+		return deleted + fallback;
+	}
+
+	/**
+	 * DEAD batch, written for `idx_<table>_dead_created_at`
+	 * (`(created_at) WHERE status = 'DEAD'`). `COALESCE(processed_at, created_at) < cutoff`
+	 * is a residual filter on top of the `created_at` range.
+	 */
+	private async deleteDeadBatch(olderThanDays: number, limit: number): Promise<number> {
+		const c = this.qcols;
+		const cutoff = this.purgeCutoffSql();
+		return this.deleteBySubquery(
+			`WHERE ${c.status} = 'DEAD'
+				  AND ${c.createdAt} < ${cutoff}
+				  AND COALESCE(${c.processedAt}, ${c.createdAt}) < ${cutoff}
+				ORDER BY ${c.createdAt} ASC
+				LIMIT $2`,
+			olderThanDays,
+			limit,
+		);
+	}
+
+	/**
 	 * Set-based requeue for the reprocess cron: in ONE statement, deletes the given records that
-	 * are still FAILED and re-inserts them as PENDING (same id, attempts, payload, sequence number;
-	 * `created_at = NOW()`, `processed_at` NULL). The re-INSERT is what produces the WAL event the
-	 * replication service reacts to. Rows are inserted in their original `created_at` order so the
-	 * per-aggregate WAL order is preserved. Returns the ids actually requeued (records that are no
-	 * longer FAILED are skipped).
+	 * are still FAILED and re-inserts them as PENDING (same id, attempts, payload, sequence number).
+	 * `created_at` is copied from the deleted row — it is the immutable order key and must not be
+	 * replaced with `NOW()`. `requeued_at = NOW()` records when the row was requeued (staleness
+	 * only); `processed_at` is NULL. The re-INSERT produces the WAL event the replication service
+	 * reacts to. Rows are inserted in `(created_at, id)` order. Returns the ids actually requeued
+	 * (records that are no longer FAILED are skipped).
 	 */
 	async requeueFailed(ids: string[]): Promise<string[]> {
 		if (ids.length === 0) return [];
@@ -391,13 +534,13 @@ export class OutboxRepository {
 			INSERT INTO ${this.tableName} (
 				${c.id}, ${c.aggregateId}, ${c.aggregateType}, ${c.eventType},
 				${c.payload}, ${c.sequenceNumber}, ${c.status}, ${c.attempts},
-				${c.createdAt}
+				${c.createdAt}, ${c.requeuedAt}, ${c.processedAt}
 			)
 			SELECT ${m(c.id)}, ${m(c.aggregateId)}, ${m(c.aggregateType)}, ${m(c.eventType)},
 				${m(c.payload)}, ${m(c.sequenceNumber)}, 'PENDING', ${m(c.attempts)},
-				NOW()
+				${m(c.createdAt)}, NOW(), NULL
 			FROM moved
-			ORDER BY ${m(c.createdAt)} ASC
+			ORDER BY ${m(c.createdAt)} ASC, ${m(c.id)} ASC
 			RETURNING ${c.id}
 		`;
 		const result = await this.pool.query(query, [ids]);

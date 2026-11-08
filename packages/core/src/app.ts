@@ -13,6 +13,7 @@ import { startReplication } from "./replication";
 import { RetryQueue } from "./retry-queue";
 import { shutdownTelemetry } from "./telemetry";
 import type { Publisher } from "./types";
+import { AggregateSequencer } from "./utils/aggregate-sequencer";
 import { applyNamingToTableName } from "./utils/column-naming";
 import { createWalChangeHandler } from "./wal-change-handler";
 
@@ -37,6 +38,8 @@ const outboxProcessor = new OutboxProcessor({
 
 let publisher: Publisher | null = null;
 let retryQueue: RetryQueue | null = null;
+// One chain for the process: WAL handling and the RetryQueue must not publish the same aggregate at once.
+const aggregateSequencer = new AggregateSequencer();
 
 let replicationService: LogicalReplicationService | null = null;
 let replicationHealthy = false;
@@ -143,6 +146,7 @@ process.once("SIGINT", () => shutdown("SIGINT"));
 		config: retryQueueConfig,
 		maxAttempts: maxOutboxAttempts,
 		concurrency: config.dbPoolSize,
+		sequencer: aggregateSequencer,
 	});
 
 	const onChange = createWalChangeHandler({
@@ -152,6 +156,7 @@ process.once("SIGINT", () => shutdown("SIGINT"));
 		retryQueue,
 		logger,
 		concurrency: config.dbPoolSize,
+		sequencer: aggregateSequencer,
 	});
 
 	replicationService = await startReplication({

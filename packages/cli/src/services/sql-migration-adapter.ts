@@ -38,14 +38,19 @@ CREATE TABLE IF NOT EXISTS ${t} (
   ${q(cols.attempts)} INTEGER NOT NULL DEFAULT 0,
   ${q(cols.createdAt)} TIMESTAMP NOT NULL DEFAULT NOW(),
   ${q(cols.processedAt)} TIMESTAMP,
+  ${q(cols.requeuedAt)} TIMESTAMP,
   ${q(cols.sequenceNumber)} BIGINT
 );
 
--- Partial indexes matching the only status-based reads (FAILED reprocessing and the stale
--- PENDING sweeper). They stay small because PROCESSED/DEAD rows (the vast majority) are not
--- indexed, and a PENDING -> PROCESSED update adds no entry to them.
+-- Partial indexes for status-based reads, the per-aggregate predecessor check, and retention.
+-- PENDING/FAILED indexes stay small. Becoming PROCESSED adds one entry to the PROCESSED index.
+-- The null processed_at purge fallback has no index of its own.
 CREATE INDEX IF NOT EXISTS ${q(`idx_${tableName}_pending_created_at`)} ON ${t}(${q(cols.createdAt)}) WHERE ${q(cols.status)} = 'PENDING';
 CREATE INDEX IF NOT EXISTS ${q(`idx_${tableName}_failed_created_at`)} ON ${t}(${q(cols.createdAt)}) WHERE ${q(cols.status)} = 'FAILED';
+CREATE INDEX IF NOT EXISTS ${q(`idx_${tableName}_pending_aggregate_order`)} ON ${t}(${q(cols.aggregateId)}, ${q(cols.createdAt)}, ${q(cols.id)}) WHERE ${q(cols.status)} = 'PENDING';
+CREATE INDEX IF NOT EXISTS ${q(`idx_${tableName}_failed_aggregate_order`)} ON ${t}(${q(cols.aggregateId)}, ${q(cols.createdAt)}, ${q(cols.id)}) WHERE ${q(cols.status)} = 'FAILED';
+CREATE INDEX IF NOT EXISTS ${q(`idx_${tableName}_processed_processed_at`)} ON ${t}(${q(cols.processedAt)}) WHERE ${q(cols.status)} = 'PROCESSED';
+CREATE INDEX IF NOT EXISTS ${q(`idx_${tableName}_dead_created_at`)} ON ${t}(${q(cols.createdAt)}) WHERE ${q(cols.status)} = 'DEAD';
 `;
 	}
 }

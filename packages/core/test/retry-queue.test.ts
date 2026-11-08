@@ -18,10 +18,10 @@ const config: RetryConfig = {
 
 const maxAttempts = 5;
 
-function makeRecord(id: string, attempts = 0): OutboxRecord {
+function makeRecord(id: string, attempts = 0, aggregateId = "agg-1"): OutboxRecord {
 	return new OutboxRecord({
 		id,
-		aggregateId: "agg-1",
+		aggregateId,
 		aggregateType: "T",
 		eventType: "e.v",
 		payload: {},
@@ -263,7 +263,9 @@ describe("RetryQueue under failure storms (bounded concurrency)", () => {
 	});
 
 	function enqueueAll(): void {
-		for (let i = 0; i < totalRecords; i++) queue.enqueue(makeRecord(`storm-${i}`));
+		// Distinct aggregates: the same aggregate is serialized by the sequencer, so the
+		// queue's own concurrency bound is only visible across aggregates.
+		for (let i = 0; i < totalRecords; i++) queue.enqueue(makeRecord(`storm-${i}`, 0, `agg-${i}`));
 	}
 
 	async function settleNext(count: number, outcome: "resolve" | "reject" = "resolve"): Promise<void> {
