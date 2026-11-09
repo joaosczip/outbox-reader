@@ -44,6 +44,8 @@ services:
         entrypoint: ["sh", "-c"]
         command:
             - |
+                # Idempotent: outbox-reader waits for this job to succeed on every `up`.
+                (nats stream info TEST --server=nats://nats:4222 >/dev/null 2>&1 ||
                 nats stream add TEST \
                   --server=nats://nats:4222 \
                   --subjects='test.>' \
@@ -55,14 +57,15 @@ services:
                   --max-bytes=-1 \
                   --max-age=0 \
                   --dupe-window=2m \
-                  --defaults &&
+                  --defaults) &&
+                (nats consumer info TEST test-consumer --server=nats://nats:4222 >/dev/null 2>&1 ||
                 nats consumer add TEST test-consumer \
                   --server=nats://nats:4222 \
                   --pull \
                   --deliver=all \
                   --ack=explicit \
                   --replay=instant \
-                  --defaults
+                  --defaults)
 
     nats-box:
         image: natsio/nats-box:latest
