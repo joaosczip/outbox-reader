@@ -46,7 +46,9 @@ describe("createPublisher", () => {
 				retryConfig,
 				options: { region: "us-east-1", queueUrl: "https://sqs.amazonaws.com/1/q" },
 			};
-			expect(() => createPublisher(cfg, logger)).toThrow("'sqs' is not yet implemented");
+			expect(() => createPublisher(cfg, logger)).toThrow(
+				'provider "sqs" is not implemented yet; only "nats" is supported',
+			);
 		});
 
 		it("throws for kafka", () => {
@@ -55,7 +57,9 @@ describe("createPublisher", () => {
 				retryConfig,
 				options: { brokers: ["localhost:9092"] },
 			};
-			expect(() => createPublisher(cfg, logger)).toThrow("'kafka' is not yet implemented");
+			expect(() => createPublisher(cfg, logger)).toThrow(
+				'provider "kafka" is not implemented yet; only "nats" is supported',
+			);
 		});
 	});
 });

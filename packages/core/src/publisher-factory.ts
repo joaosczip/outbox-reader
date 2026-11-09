@@ -1,6 +1,6 @@
 import type { Logger } from "./logger";
 import { NATSPublisher } from "./nats-publisher";
-import type { PublisherConfig } from "./publisher-config";
+import { type PublisherConfig, notImplementedMessage } from "./publisher-config";
 import type { Publisher } from "./types";
 
 export function createPublisher(config: PublisherConfig, logger: Logger): Publisher {
@@ -15,9 +15,8 @@ export function createPublisher(config: PublisherConfig, logger: Logger): Publis
 			});
 		}
 		case "sqs":
-			throw new Error("Publisher provider 'sqs' is not yet implemented");
 		case "kafka":
-			throw new Error("Publisher provider 'kafka' is not yet implemented");
+			throw new Error(notImplementedMessage(config.provider));
 		default: {
 			const _exhaustive: never = config;
 			throw new Error(`Unknown publisher provider: ${(_exhaustive as { provider: string }).provider}`);
