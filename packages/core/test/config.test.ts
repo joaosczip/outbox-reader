@@ -110,14 +110,14 @@ describe("config", () => {
 		});
 
 		it("throws when REPLICATION_SLOT_NAME is missing", () => {
-			delete process.env.REPLICATION_SLOT_NAME;
+			Reflect.deleteProperty(process.env, "REPLICATION_SLOT_NAME");
 			expect(() => configModule.loadAppConfig()).toThrow(
 				"Environment variable REPLICATION_SLOT_NAME is required",
 			);
 		});
 
 		it("throws when DATABASE_URL is missing", () => {
-			delete process.env.DATABASE_URL;
+			Reflect.deleteProperty(process.env, "DATABASE_URL");
 			expect(() => configModule.loadAppConfig()).toThrow("Environment variable DATABASE_URL is required");
 		});
 
@@ -253,7 +253,7 @@ describe("config", () => {
 		});
 
 		it("throws when DATABASE_URL is missing", () => {
-			delete process.env.DATABASE_URL;
+			Reflect.deleteProperty(process.env, "DATABASE_URL");
 			expect(() => configModule.loadCronConfig()).toThrow("Environment variable DATABASE_URL is required");
 		});
 
