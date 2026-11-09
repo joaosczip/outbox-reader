@@ -60,19 +60,21 @@ describe("Outbox Flow E2E", () => {
 	beforeAll(async () => {
 		pool = new Pool({ connectionString: testConfig.connectionString, max: 5 });
 
+		// Same shape as `outy create migration` (id UUID: the predecessor check casts to uuid).
+		await pool.query("DROP TABLE IF EXISTS outbox");
 		await pool.query(`
-			CREATE TABLE IF NOT EXISTS outbox (
-				id VARCHAR(255) PRIMARY KEY,
+			CREATE TABLE outbox (
+				id UUID PRIMARY KEY,
 				aggregate_id VARCHAR(255) NOT NULL,
 				aggregate_type VARCHAR(255) NOT NULL,
 				event_type VARCHAR(255) NOT NULL,
 				payload JSONB NOT NULL,
-				sequence_number BIGINT NULL,
+				status TEXT NOT NULL DEFAULT 'PENDING',
+				attempts INTEGER NOT NULL DEFAULT 0,
 				created_at TIMESTAMP NOT NULL DEFAULT NOW(),
 				processed_at TIMESTAMP NULL,
 				requeued_at TIMESTAMP NULL,
-				status VARCHAR(50) NOT NULL DEFAULT 'PENDING',
-				attempts INTEGER NOT NULL DEFAULT 0
+				sequence_number BIGINT NULL
 			)
 		`);
 
