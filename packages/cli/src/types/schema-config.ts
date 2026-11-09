@@ -44,7 +44,18 @@ export interface SchemaGenerationConfig {
 	columnNaming?: ColumnNaming;
 }
 
+/** Result of running an external command (the shape of `spawnSync`'s result that matters). */
+export interface CommandResult {
+	status: number | null;
+	error?: Error;
+}
+
+/** Runs `command` with `args` (no shell) and inherited stdio. */
+export type CommandRunner = (command: string, args: string[]) => CommandResult;
+
 export interface OutboxSchemaGenerationOptions {
 	config?: SchemaGenerationConfig;
 	configPath?: string;
+	/** Overrides how `prisma migrate dev` is executed (for tests). Defaults to spawnSync without a shell. */
+	runCommand?: CommandRunner;
 }
