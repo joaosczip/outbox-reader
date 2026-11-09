@@ -96,7 +96,7 @@ Details: [README: message contract](README.md#message-contract).
 | publishes fail with "no responders" | create the stream (step 4) with subjects `<prefix>.>` |
 | `Failed to read publisher config` | set both `NATS_SERVERS` and `NATS_SUBJECT_PREFIX` (env-only mode) or mount a `publisher.yaml` |
 | `/ready` is OK but rows stay `PENDING` | naming mismatch (see rule above) |
-| `extension "pg_uuidv7" is not available` when creating the table | install pg_uuidv7, or remove the `CREATE EXTENSION` line and the `id` default from the generated SQL (the client always sends the id) |
+| `null value in column "id"` / `invalid input syntax for type uuid` | every producer must send a UUID id (the client does; raw SQL: `gen_random_uuid()`) |
 | `replication slot ... is active for PID` | only one service instance per slot |
 
 More in [README: troubleshooting](README.md#troubleshooting).
