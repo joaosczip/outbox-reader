@@ -3,7 +3,9 @@ import { optimisticLockMisses, recordsDead, recordsFailed, retryAttempts, retryQ
 import type { OutboxRecord } from "./models/outbox-record";
 import type { OutboxProcessor } from "./outbox-processor";
 import type { OutboxRepository } from "./outbox-repository";
+import { drainReadySuccessors } from "./successor-drain";
 import type { Publisher, RetryConfig } from "./types";
+import { AggregateSequencer } from "./utils/aggregate-sequencer";
 
 type QueueEntry = {
 	record: OutboxRecord;
@@ -30,6 +32,7 @@ export class RetryQueue {
 	private readyHead = 0;
 	private inFlight = 0;
 	private readonly concurrency: number;
+	private readonly sequencer: AggregateSequencer;
 
 	constructor(
 		private readonly deps: {
@@ -46,6 +49,11 @@ export class RetryQueue {
 			 * Integer >= 1, default {@link DEFAULT_RETRY_CONCURRENCY}.
 			 */
 			concurrency?: number;
+			/**
+			 * Shared with the WAL handler so the two paths never publish one aggregate at the same
+			 * time. A private chain is used when omitted.
+			 */
+			sequencer?: AggregateSequencer;
 		},
 	) {
 		const concurrency = deps.concurrency ?? DEFAULT_RETRY_CONCURRENCY;
@@ -53,6 +61,7 @@ export class RetryQueue {
 			throw new RangeError(`RetryQueue concurrency must be an integer >= 1, received ${concurrency}`);
 		}
 		this.concurrency = concurrency;
+		this.sequencer = deps.sequencer ?? new AggregateSequencer();
 	}
 
 	enqueue(record: OutboxRecord): void {
@@ -92,12 +101,16 @@ export class RetryQueue {
 			return;
 		}
 		const delay = this.computeDelay(entry.attempt);
-		const timer = setTimeout(() => {
-			this.pendingTimers.delete(timer);
-			if (this.stopped) return;
-			this.ready.push(entry);
-			this.drain();
-		}, delay);
+		// Leave the aggregate turn before arming the timer. AsyncLocalStorage would otherwise
+		// stick to the callback and the next attempt would look like sequencer re-entry.
+		const timer = this.sequencer.exit(() =>
+			setTimeout(() => {
+				this.pendingTimers.delete(timer);
+				if (this.stopped) return;
+				this.ready.push(entry);
+				this.drain();
+			}, delay),
+		);
 		this.pendingTimers.add(timer);
 	}
 
@@ -122,19 +135,29 @@ export class RetryQueue {
 	}
 
 	private async run(entry: QueueEntry): Promise<void> {
+		await this.sequencer.run(entry.record.aggregateId, () => this.attempt(entry));
+	}
+
+	private async attempt(entry: QueueEntry): Promise<void> {
 		const { record, attempt } = entry;
 		retryAttempts.add(1, { "event.type": record.eventType });
 		try {
-			await this.deps.processor.processInserts({
+			const outcome = await this.deps.processor.processInserts({
 				insertedRecord: record,
 				publisher: this.deps.publisher,
 				prefetchedOutbox: undefined, // force fresh DB read on every retry
 			});
 			retryQueueSize.add(-1);
-			this.deps.logger.info({
-				message: `Outbox record ${record.id} succeeded on retry attempt ${attempt + 1}`,
-				extra: { recordId: record.id, attempt: attempt + 1 },
-			});
+			if (outcome === "blocked") return;
+			if (outcome !== "dead") {
+				this.deps.logger.info({
+					message: `Outbox record ${record.id} succeeded on retry attempt ${attempt + 1}`,
+					extra: { recordId: record.id, attempt: attempt + 1 },
+				});
+			}
+			if (outcome === "published" || outcome === "dead") {
+				await this.drainSuccessors(record.aggregateId);
+			}
 		} catch (error) {
 			const nextAttempt = attempt + 1;
 			if (nextAttempt >= this.deps.config.numOfAttempts) {
@@ -191,9 +214,22 @@ export class RetryQueue {
 				extra: { recordId: record.id, attempts: record.attempts + 1, maxAttempts: this.deps.maxAttempts },
 			});
 			recordsDead.add(1, { reason: "retries_exhausted", "event.type": record.eventType });
+			// DEAD does not block the tail. Drain runs in this same sequencer turn.
+			await this.drainSuccessors(record.aggregateId);
 		} else {
 			recordsFailed.add(1, { "event.type": record.eventType });
 		}
+	}
+
+	private drainSuccessors(aggregateId: string): Promise<void> {
+		return drainReadySuccessors({
+			aggregateId,
+			processor: this.deps.processor,
+			repository: this.deps.outboxRepository,
+			publisher: this.deps.publisher,
+			retryQueue: this,
+			logger: this.deps.logger,
+		});
 	}
 
 	private computeDelay(attempt: number): number {

@@ -34,6 +34,7 @@ describe("SqlMigrationAdapter", () => {
 			expect(sql).toContain('"attempts" INTEGER NOT NULL DEFAULT 0');
 			expect(sql).toContain('"created_at" TIMESTAMP NOT NULL DEFAULT NOW()');
 			expect(sql).toContain('"processed_at" TIMESTAMP');
+			expect(sql).toContain('"requeued_at" TIMESTAMP');
 			expect(sql).toContain('"sequence_number" BIGINT');
 		});
 
@@ -155,13 +156,34 @@ describe("SqlMigrationAdapter", () => {
 		});
 
 		const cases = [
-			{ naming: "snake_case", table: "outbox", createdAt: "created_at", sequenceNumber: "sequence_number" },
-			{ naming: "camelCase", table: "outbox", createdAt: "createdAt", sequenceNumber: "sequenceNumber" },
-			{ naming: "PascalCase", table: "Outbox", createdAt: "CreatedAt", sequenceNumber: "SequenceNumber" },
+			{
+				naming: "snake_case",
+				table: "outbox",
+				createdAt: "created_at",
+				processedAt: "processed_at",
+				aggregateId: "aggregate_id",
+				sequenceNumber: "sequence_number",
+			},
+			{
+				naming: "camelCase",
+				table: "outbox",
+				createdAt: "createdAt",
+				processedAt: "processedAt",
+				aggregateId: "aggregateId",
+				sequenceNumber: "sequenceNumber",
+			},
+			{
+				naming: "PascalCase",
+				table: "Outbox",
+				createdAt: "CreatedAt",
+				processedAt: "ProcessedAt",
+				aggregateId: "AggregateId",
+				sequenceNumber: "SequenceNumber",
+			},
 		] as const;
 
-		for (const { naming, table, createdAt, sequenceNumber } of cases) {
-			it(`creates only partial created_at indexes for PENDING and FAILED (${naming})`, async () => {
+		for (const { naming, table, createdAt, processedAt, aggregateId, sequenceNumber } of cases) {
+			it(`creates partial indexes for pending, failed, order and retention (${naming})`, async () => {
 				await adapter.createMigration({ target: "sql", columnNaming: naming });
 
 				const sql = written.join("");
@@ -171,9 +193,21 @@ describe("SqlMigrationAdapter", () => {
 				expect(sql).toContain(
 					`CREATE INDEX IF NOT EXISTS "idx_${table}_failed_created_at" ON "${table}"("${createdAt}") WHERE "status" = 'FAILED';`,
 				);
+				expect(sql).toContain(
+					`CREATE INDEX IF NOT EXISTS "idx_${table}_pending_aggregate_order" ON "${table}"("${aggregateId}", "${createdAt}", "id") WHERE "status" = 'PENDING';`,
+				);
+				expect(sql).toContain(
+					`CREATE INDEX IF NOT EXISTS "idx_${table}_failed_aggregate_order" ON "${table}"("${aggregateId}", "${createdAt}", "id") WHERE "status" = 'FAILED';`,
+				);
+				expect(sql).toContain(
+					`CREATE INDEX IF NOT EXISTS "idx_${table}_processed_processed_at" ON "${table}"("${processedAt}") WHERE "status" = 'PROCESSED';`,
+				);
+				expect(sql).toContain(
+					`CREATE INDEX IF NOT EXISTS "idx_${table}_dead_created_at" ON "${table}"("${createdAt}") WHERE "status" = 'DEAD';`,
+				);
 				// Regression: the low-selectivity status index, the unused sequence_number index and the
 				// unfiltered created_at index amplify every status UPDATE and must not be generated.
-				expect(sql.match(/CREATE INDEX/g)).toHaveLength(2);
+				expect(sql.match(/CREATE INDEX/g)).toHaveLength(6);
 				expect(sql).not.toContain(`ON "${table}"("status")`);
 				expect(sql).not.toContain(`("${sequenceNumber}")`);
 				expect(sql).not.toContain(`"idx_${table}_status"`);
@@ -191,6 +225,18 @@ describe("SqlMigrationAdapter", () => {
 			);
 			expect(sql).toContain(
 				`CREATE INDEX IF NOT EXISTS "idx_MyOutbox_failed_created_at" ON "MyOutbox"("CreatedAt") WHERE "status" = 'FAILED';`,
+			);
+			expect(sql).toContain(
+				`CREATE INDEX IF NOT EXISTS "idx_MyOutbox_pending_aggregate_order" ON "MyOutbox"("AggregateId", "CreatedAt", "id") WHERE "status" = 'PENDING';`,
+			);
+			expect(sql).toContain(
+				`CREATE INDEX IF NOT EXISTS "idx_MyOutbox_failed_aggregate_order" ON "MyOutbox"("AggregateId", "CreatedAt", "id") WHERE "status" = 'FAILED';`,
+			);
+			expect(sql).toContain(
+				`CREATE INDEX IF NOT EXISTS "idx_MyOutbox_processed_processed_at" ON "MyOutbox"("ProcessedAt") WHERE "status" = 'PROCESSED';`,
+			);
+			expect(sql).toContain(
+				`CREATE INDEX IF NOT EXISTS "idx_MyOutbox_dead_created_at" ON "MyOutbox"("CreatedAt") WHERE "status" = 'DEAD';`,
 			);
 		});
 	});

@@ -114,13 +114,17 @@ module.exports = {
         type: Sequelize.DATE,
         allowNull: true,
       },
+      ${cols.requeuedAt}: {
+        type: Sequelize.DATE,
+        allowNull: true,
+      },
       ${cols.sequenceNumber}: {
         type: Sequelize.BIGINT,
         allowNull: true,
       },
     });
 
-    // Partial indexes for the only status-based reads (FAILED reprocessing, stale PENDING sweep).
+    // Partial indexes: PENDING/FAILED reads, per-aggregate order, and retention purge.
     await queryInterface.addIndex("${tableName}", ["${cols.createdAt}"], {
       name: "idx_${tableName}_pending_created_at",
       where: { ${cols.status}: "PENDING" },
@@ -128,6 +132,22 @@ module.exports = {
     await queryInterface.addIndex("${tableName}", ["${cols.createdAt}"], {
       name: "idx_${tableName}_failed_created_at",
       where: { ${cols.status}: "FAILED" },
+    });
+    await queryInterface.addIndex("${tableName}", ["${cols.aggregateId}", "${cols.createdAt}", "${cols.id}"], {
+      name: "idx_${tableName}_pending_aggregate_order",
+      where: { ${cols.status}: "PENDING" },
+    });
+    await queryInterface.addIndex("${tableName}", ["${cols.aggregateId}", "${cols.createdAt}", "${cols.id}"], {
+      name: "idx_${tableName}_failed_aggregate_order",
+      where: { ${cols.status}: "FAILED" },
+    });
+    await queryInterface.addIndex("${tableName}", ["${cols.processedAt}"], {
+      name: "idx_${tableName}_processed_processed_at",
+      where: { ${cols.status}: "PROCESSED" },
+    });
+    await queryInterface.addIndex("${tableName}", ["${cols.createdAt}"], {
+      name: "idx_${tableName}_dead_created_at",
+      where: { ${cols.status}: "DEAD" },
     });
   },
 

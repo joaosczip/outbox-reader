@@ -6,6 +6,9 @@ import type { OutboxRepository } from "./outbox-repository";
 import type { Publisher } from "./types";
 import { type ColumnNaming, applyNamingToTableName, getColumnNames } from "./utils/column-naming";
 
+/** Outcome of one `processInserts` attempt. Callers that do not branch on it may ignore the value. */
+export type ProcessInsertsResult = "published" | "already_processed" | "dead" | "blocked" | "lock_miss";
+
 export class OutboxProcessor {
 	private outboxRepository: OutboxRepository;
 	private logger: Logger;
@@ -41,7 +44,7 @@ export class OutboxProcessor {
 		insertedRecord: OutboxRecord;
 		publisher: Publisher;
 		prefetchedOutbox?: OutboxRecord | null;
-	}) {
+	}): Promise<ProcessInsertsResult> {
 		const outbox =
 			prefetchedOutbox !== undefined
 				? prefetchedOutbox
@@ -53,13 +56,24 @@ export class OutboxProcessor {
 				extra: { recordId: record.id },
 			});
 			recordsSkipped.add(1, { reason: "already_processed" });
-			return;
+			return "already_processed";
 		}
 
 		if (outbox.attempts >= this.maxAttempts) {
 			recordsSkipped.add(1, { reason: "max_attempts_exceeded" });
-			await this.markAsDead(outbox);
-			return;
+			const markedDead = await this.markAsDead(outbox);
+			return markedDead ? "dead" : "lock_miss";
+		}
+
+		// DEAD is terminal and does not block successors. After the head is marked DEAD, the tail
+		// may be published. Only an older PENDING or FAILED sibling blocks; FAILED keeps blocking
+		// until that head is requeued and published, or becomes DEAD. PROCESSED siblings do not.
+		if (await this.outboxRepository.hasOlderPendingOrFailed(outbox)) {
+			this.logger.debug({
+				message: `Outbox record ${record.id} is blocked by an older PENDING or FAILED sibling`,
+				extra: { recordId: record.id, aggregateId: outbox.aggregateId },
+			});
+			return "blocked";
 		}
 
 		const sequenceNumber = await publisher.publish({ record: outbox });
@@ -84,13 +98,14 @@ export class OutboxProcessor {
 				extra: { recordId: record.id, attempts: outbox.attempts, sequenceNumber },
 			});
 			optimisticLockMisses.add(1, { operation: "mark_processed", "event.type": outbox.eventType });
-			return;
+			return "lock_miss";
 		}
 
 		recordsProcessed.add(1, { "event.type": outbox.eventType });
+		return "published";
 	}
 
-	private async markAsDead(outbox: OutboxRecord): Promise<void> {
+	private async markAsDead(outbox: OutboxRecord): Promise<boolean> {
 		const marked = await this.outboxRepository.markAsDead({
 			id: outbox.id as string,
 			attempts: outbox.attempts,
@@ -110,7 +125,7 @@ export class OutboxProcessor {
 				extra: { recordId: outbox.id, attempts: outbox.attempts },
 			});
 			optimisticLockMisses.add(1, { operation: "mark_dead", "event.type": outbox.eventType });
-			return;
+			return false;
 		}
 
 		this.logger.warn({
@@ -118,6 +133,7 @@ export class OutboxProcessor {
 			extra: { recordId: outbox.id, attempts: outbox.attempts, maxAttempts: this.maxAttempts },
 		});
 		recordsDead.add(1, { reason: "max_attempts_exceeded", "event.type": outbox.eventType });
+		return true;
 	}
 
 	filterChanges(log: Wal2Json.Output) {

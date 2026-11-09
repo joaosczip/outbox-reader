@@ -94,6 +94,7 @@ export class PrismaSchemaGenerator {
 			`sequenceNumber  BigInt?${mapAnnotation("sequenceNumber", cols.sequenceNumber)}`,
 			`createdAt       DateTime @default(now())${mapAnnotation("createdAt", cols.createdAt)}`,
 			`processedAt     DateTime?${mapAnnotation("processedAt", cols.processedAt)}`,
+			`requeuedAt      DateTime?${mapAnnotation("requeuedAt", cols.requeuedAt)}`,
 			'status          String   @default("PENDING")',
 			"attempts        Int      @default(0)",
 		];
@@ -111,6 +112,10 @@ export class PrismaSchemaGenerator {
   @@map("${dbTableName}")
   @@index([createdAt], map: "idx_${dbTableName}_pending_created_at", where: { status: "PENDING" })
   @@index([createdAt], map: "idx_${dbTableName}_failed_created_at", where: { status: "FAILED" })
+  @@index([aggregateId, createdAt, id], map: "idx_${dbTableName}_pending_aggregate_order", where: { status: "PENDING" })
+  @@index([aggregateId, createdAt, id], map: "idx_${dbTableName}_failed_aggregate_order", where: { status: "FAILED" })
+  @@index([processedAt], map: "idx_${dbTableName}_processed_processed_at", where: { status: "PROCESSED" })
+  @@index([createdAt], map: "idx_${dbTableName}_dead_created_at", where: { status: "DEAD" })
 }`;
 	}
 

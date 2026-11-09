@@ -70,6 +70,7 @@ describe("Outbox Flow E2E", () => {
 				sequence_number BIGINT NULL,
 				created_at TIMESTAMP NOT NULL DEFAULT NOW(),
 				processed_at TIMESTAMP NULL,
+				requeued_at TIMESTAMP NULL,
 				status VARCHAR(50) NOT NULL DEFAULT 'PENDING',
 				attempts INTEGER NOT NULL DEFAULT 0
 			)

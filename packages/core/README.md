@@ -18,10 +18,20 @@ PostgreSQL WAL → replication.ts → OutboxProcessor → NATSPublisher → NATS
 
 1. `startReplication()` subscribes to the replication slot (`REPLICATION_SLOT_NAME`). With `wal2json` >= 2.0 the server streams only `INSERT`s on the outbox table (`TABLE_NAME`).
 2. `OutboxProcessor.filterChanges()` maps the WAL rows to outbox records (honouring `COLUMN_NAMING`).
-3. The records are re-read from the database in one query (only `PENDING`/`FAILED` ones are processed), published, and marked `PROCESSED`.
-4. A failed publish marks the record `FAILED`, increments `attempts`, and hands it to the in-memory `RetryQueue`. At `MAX_OUTBOX_ATTEMPTS` the record becomes `DEAD`.
+3. The records are re-read from the database in one query (only `PENDING`/`FAILED` ones are processed). If an older sibling of the same aggregate is still `PENDING` or `FAILED`, the record is `blocked` and not published yet; otherwise it is published and marked `PROCESSED`.
+4. A failed publish hands the head to the in-memory `RetryQueue`; later siblings of that aggregate stay `PENDING` until the head is published or marked `DEAD`. At `MAX_OUTBOX_ATTEMPTS` the record becomes `DEAD`.
 
-Events of the same `aggregateId` are published sequentially in commit order; different aggregates run in parallel (up to `DB_POOL_SIZE`).
+### Aggregate order
+
+Within one process, events of the same `aggregateId` are published in `(created_at, id)` order. A later event is not published while an older sibling is `PENDING` or `FAILED`. `PROCESSED` siblings do not block. `DEAD` is terminal and does not block: after the head is marked `DEAD`, the tail may be published. `FAILED` blocks the tail until that head is requeued and published, or becomes `DEAD`. Different aggregates stay parallel (up to `DB_POOL_SIZE`).
+
+WAL handling and the in-memory `RetryQueue` share a per-aggregate promise chain, so one process does not publish the same aggregate from both paths at once. The chain must not be re-entered from inside a running turn; successors are drained in that same turn.
+
+This is not a cross-process lock. The predecessor check runs in the database immediately before publish. The live service and the `check-pending-events` sweeper can both pass that check (a time-of-check/time-of-use race) and both publish. Delivery stays at-least-once: NATS dedups by `record.id` only inside the stream's duplicate window (default 2 minutes). Consumers must be idempotent.
+
+`created_at` is the immutable order key. Requeue copies the original `created_at` and sets `requeued_at = NOW()`. `requeued_at` is used only to decide staleness (a recently requeued row is not stale). It is not the order key and it is not the retention age.
+
+### Failure behaviour
 
 A WAL position is acknowledged only after its events were published or handed to the retry queue. Because PostgreSQL acknowledgements are cumulative, any replication or batch error makes the service shut down gracefully and exit with code `1`, so the restarted process resumes from the last confirmed position. Startup failures (missing slot, invalid publisher config, NATS connect, replication subscribe) also exit `1`; a missing slot is reported with a hint to run `outy setup replication`.
 
@@ -97,7 +107,7 @@ Run one instance per replication slot. For the full local stack (PostgreSQL + wa
 
 | Script | Purpose |
 |---|---|
-| `src/cronjobs/check-pending-events.ts` | Stale `PENDING` sweeper: republishes records older than `PENDING_EVENTS_THRESHOLD_MINUTES` (default 10) through `OutboxProcessor`, sequential per aggregate. Each record is re-read first, so one processed in the meantime is skipped; a failing one is marked `FAILED`. Needs the NATS settings. |
+| `src/cronjobs/check-pending-events.ts` | Stale `PENDING` sweeper: republishes records older than `PENDING_EVENTS_THRESHOLD_MINUTES` (default 10) through `OutboxProcessor`, sequential per aggregate. Each record is re-read first, so one processed in the meantime is skipped; a failing one is marked `FAILED` and its later siblings stay `PENDING` until it is published or `DEAD`. A recently requeued row (fresh `requeued_at`) is not stale. Needs the NATS settings. |
 | `src/cronjobs/reprocess-failed-events.ts` | In batches, re-inserts `FAILED` records as `PENDING` (new WAL `INSERT`) in one transaction per batch; records at `MAX_OUTBOX_ATTEMPTS` are marked `DEAD`. |
 | `src/cronjobs/purge-processed-events.ts` | Deletes `PROCESSED` records older than `PROCESSED_RETENTION_DAYS` (default 7) in batches of 1000; `DEAD` records only when `DEAD_RETENTION_DAYS` is set. Never deletes `PENDING`/`FAILED`. |
 
