@@ -325,9 +325,9 @@ All configuration comes from environment variables (see [`.env.example`](.env.ex
 |---|---|---|---|
 | `DATABASE_URL` | service, cronjobs | **required** | PostgreSQL connection string. Plain URL, no `?replication=database`. |
 | `REPLICATION_SLOT_NAME` | service | **required** | Logical replication slot created in step 2. Cronjobs do not need it. |
-| `NATS_SERVERS` | service, check-pending | `nats` server(s) from `publisher.yaml` | Comma-separated NATS URLs. Overrides `options.servers` in `publisher.yaml`. |
+| `NATS_SERVERS` | service, check-pending | — (or `options.servers` in `publisher.yaml`) | Comma-separated NATS URLs. Overrides `options.servers` in `publisher.yaml`. |
 | `TARGET_NATS_URL` | service, check-pending | — | Deprecated alias of `NATS_SERVERS`. |
-| `NATS_SUBJECT_PREFIX` | service, check-pending | from `publisher.yaml` | Subject prefix: messages go to `<prefix>.<eventType>`. Overrides `options.subjectPrefix`. |
+| `NATS_SUBJECT_PREFIX` | service, check-pending | — (or `options.subjectPrefix` in `publisher.yaml`) | Subject prefix: messages go to `<prefix>.<eventType>`. Overrides `options.subjectPrefix`. |
 | `NATS_USER` / `NATS_PASSWORD` | service, check-pending | — | NATS user/password authentication. Override `options.user` / `options.pass`. |
 | `NATS_TOKEN` | service, check-pending | — | NATS token authentication. Overrides `options.token`. |
 | `NATS_CONNECTION_NAME` | service, check-pending | `outbox-reader` | Client connection name shown in NATS monitoring. Overrides `options.name`. |
