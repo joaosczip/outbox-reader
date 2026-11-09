@@ -106,7 +106,7 @@ describe("loadPublisherConfig", () => {
 
 		it("accepts jitter 'none' and a config without startingDelayInMs", async () => {
 			const cfg = withRetry(nats(), { jitter: "none" });
-			delete (cfg.retryConfig as Obj).startingDelayInMs;
+			Reflect.deleteProperty(cfg.retryConfig as Obj, "startingDelayInMs");
 			expect(await load(cfg)).toEqual(cfg as never);
 		});
 
@@ -132,13 +132,13 @@ describe("loadPublisherConfig", () => {
 
 		it("throws when retryConfig is missing", async () => {
 			const cfg = nats();
-			delete cfg.retryConfig;
+			Reflect.deleteProperty(cfg, "retryConfig");
 			await expect(load(cfg)).rejects.toThrow('"retryConfig" must be an object');
 		});
 
 		it("throws when options is missing", async () => {
 			const cfg = nats();
-			delete cfg.options;
+			Reflect.deleteProperty(cfg, "options");
 			await expect(load(cfg)).rejects.toThrow('"options" must be an object');
 		});
 
