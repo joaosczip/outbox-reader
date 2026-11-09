@@ -27,6 +27,12 @@ const buildOutboxHeaders = (record: OutboxRecord): JetStreamPublishOptions["head
 	return hdrs as unknown as JetStreamPublishOptions["headers"];
 };
 
+/** Strips `user:pass@` / `token@` from server URLs so they can be logged. */
+const redactServers = (servers: string | string[]): string | string[] => {
+	const redact = (server: string) => server.replace(/^([a-z][a-z0-9+.-]*:\/\/)?[^@/]*@/i, "$1***@");
+	return Array.isArray(servers) ? servers.map(redact) : redact(servers);
+};
+
 export class NATSPublisher implements Publisher {
 	private connection: NatsConnection | null = null;
 	/** Created once per connection and reused by every publish; reset on close(). */
@@ -61,7 +67,7 @@ export class NATSPublisher implements Publisher {
 		this.logger.info({
 			message: "Establishing NATS connection",
 			extra: {
-				servers: this.connectionConfig.servers,
+				servers: redactServers(this.connectionConfig.servers),
 				name: this.connectionConfig.name,
 			},
 		});

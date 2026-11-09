@@ -262,4 +262,27 @@ describe("NATSPublisher (unit)", () => {
 		});
 	});
 
+	describe("connection logging", () => {
+		it("never logs credentials embedded in server URLs", async () => {
+			const secretPublisher = new NATSPublisher({
+				retryConfig,
+				logger: logger as unknown as Logger,
+				connectionConfig: {
+					servers: ["nats://alice:s3cret@a:4222", "nats://tok3n@b:4222"],
+					pass: "other-secret",
+				},
+				subjectPrefix: SUBJECT_PREFIX,
+			});
+
+			await secretPublisher.connect();
+			await secretPublisher.close();
+
+			const logged = JSON.stringify(logger.logs);
+			expect(logged).not.toContain("s3cret");
+			expect(logged).not.toContain("tok3n");
+			expect(logged).not.toContain("other-secret");
+			expect(logged).toContain("a:4222");
+			expect(logged).toContain("b:4222");
+		});
+	});
 });
