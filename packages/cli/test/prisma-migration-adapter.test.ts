@@ -48,6 +48,21 @@ describe("PrismaMigrationAdapter", () => {
 		constructorSpy.mockRestore();
 	});
 
+	it("forwards columnNaming to the generator (regression: --column-naming was ignored for --target prisma)", async () => {
+		let usedConfig: Required<SchemaGenerationConfig> | undefined;
+		generateSpy.mockImplementation(async function (this: unknown) {
+			usedConfig = (this as { config: Required<SchemaGenerationConfig> }).config;
+		});
+
+		await adapter.createMigration({ target: "prisma", tableName: "outbox_events", columnNaming: "camelCase" });
+
+		expect(usedConfig).toMatchObject({
+			tableName: "outbox_events",
+			columnNaming: "camelCase",
+			generateMigration: true,
+		});
+	});
+
 	it("propagates errors thrown by PrismaSchemaGenerator", async () => {
 		generateSpy.mockImplementation(async () => {
 			throw new Error("prisma generate failed");

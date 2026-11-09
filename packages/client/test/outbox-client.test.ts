@@ -1,115 +1,155 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
-import { Pool, type PoolClient } from "pg";
-import { PrismaAdapter, type PrismaTransactionClient } from "../src/adapters/prisma-adapter";
-import { config } from "../src/config";
-import { OutboxStatus } from "../src/models/outbox-status";
+import { type Mock, beforeEach, describe, expect, it, mock } from "bun:test";
+import { PrismaAdapter } from "../src/adapters/prisma-adapter";
 import { OutboxClient } from "../src/outbox-client";
+import type { OutboxAdapter } from "../src/types/adapter";
+import type { CreateOutboxEvent } from "../src/types/outbox-event";
+import type { Transaction } from "../src/types/transaction";
+import { type MockPrismaTransactionClient, UUID_V7, createPrismaTransactionMock } from "./mocks/orm";
 
-let pool: Pool;
-let client: OutboxClient<PrismaTransactionClient>;
+type FakeTx = { query: () => void };
 
-function makePgPrisma(pgClient: Pool | PoolClient): PrismaTransactionClient {
-	return {
-		async $executeRawUnsafe(query: string, ...values: unknown[]) {
-			const result = await pgClient.query(query, values);
-			return result.rowCount ?? 0;
-		},
-	};
-}
+type MockAdapter = OutboxAdapter<FakeTx> & {
+	create: Mock<(event: CreateOutboxEvent, transaction: Transaction<FakeTx>) => Promise<string>>;
+};
 
-const event = {
+const createAdapterMock = (): MockAdapter => ({
+	create: mock(async (_event: CreateOutboxEvent, _transaction: Transaction<FakeTx>) => "returned-id"),
+});
+
+const event: CreateOutboxEvent = {
 	aggregateId: "order-1",
 	aggregateType: "Order",
 	eventType: "order.created",
 	payload: { total: 100 },
 };
 
-beforeAll(async () => {
-	pool = new Pool({ connectionString: config.databaseUrl });
-
-	await pool.query(`
-    CREATE TABLE IF NOT EXISTS outbox (
-      id UUID PRIMARY KEY,
-      aggregate_id TEXT NOT NULL,
-      aggregate_type TEXT NOT NULL,
-      event_type TEXT NOT NULL,
-      payload JSONB NOT NULL,
-      status TEXT NOT NULL,
-      attempts INTEGER NOT NULL DEFAULT 0,
-      created_at TIMESTAMP NOT NULL
-    )
-  `);
-});
-
-afterAll(async () => {
-	await pool?.query("DROP TABLE IF EXISTS outbox");
-	await pool?.end();
-});
-
-beforeEach(async () => {
-	await pool.query("DELETE FROM outbox");
-	client = new OutboxClient(new PrismaAdapter());
-});
-
 describe("OutboxClient", () => {
-	it("returns a valid UUID", async () => {
-		const id = await client.create(event, { underlying: makePgPrisma(pool) });
-		expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+	let adapter: MockAdapter;
+	let client: OutboxClient<FakeTx>;
+	let tx: FakeTx;
+
+	beforeEach(() => {
+		adapter = createAdapterMock();
+		client = new OutboxClient(adapter);
+		tx = { query: () => {} };
 	});
 
-	it("returns the same UUID that was persisted", async () => {
-		const id = await client.create(event, { underlying: makePgPrisma(pool) });
+	describe("transaction argument", () => {
+		it("forwards a { underlying } wrapper to the adapter unchanged", async () => {
+			const wrapper = { underlying: tx };
 
-		const result = await pool.query("SELECT id FROM outbox WHERE id = $1", [id]);
-		expect(result.rows).toHaveLength(1);
-		expect(result.rows[0].id).toBe(id);
+			const id = await client.create(event, wrapper);
+
+			expect(id).toBe("returned-id");
+			expect(adapter.create).toHaveBeenCalledTimes(1);
+			expect(adapter.create.mock.calls[0][0]).toBe(event);
+			expect(adapter.create.mock.calls[0][1]).toBe(wrapper);
+		});
+
+		it("accepts the raw transaction object and wraps it for the adapter", async () => {
+			await client.create(event, tx);
+
+			const forwarded = adapter.create.mock.calls[0][1];
+			expect(forwarded).toEqual({ underlying: tx });
+			expect(forwarded.underlying).toBe(tx);
+		});
+
+		it("treats an object with an inherited (non-own) underlying property as a raw transaction", async () => {
+			const raw = Object.create({ underlying: "from-prototype" }) as FakeTx;
+
+			await client.create(event, raw);
+
+			expect(adapter.create.mock.calls[0][1].underlying).toBe(raw);
+		});
+
+		it.each([undefined, null])(
+			"rejects a missing transaction (%p) without calling the adapter",
+			async (missing) => {
+				await expect(client.create(event, missing as never)).rejects.toThrow(/transaction is required/);
+				expect(adapter.create).not.toHaveBeenCalled();
+			},
+		);
+
+		it("rejects a wrapper whose underlying transaction is missing", async () => {
+			await expect(client.create(event, { underlying: undefined as never })).rejects.toThrow(
+				/transaction is required/,
+			);
+			expect(adapter.create).not.toHaveBeenCalled();
+		});
 	});
 
-	it("persists aggregate fields", async () => {
-		const id = await client.create(event, { underlying: makePgPrisma(pool) });
+	describe("event validation", () => {
+		it.each([
+			["aggregateId", ""],
+			["aggregateId", "   "],
+			["aggregateId", undefined],
+			["aggregateId", 42],
+			["aggregateType", ""],
+			["aggregateType", null],
+			["eventType", ""],
+			["eventType", undefined],
+		])("rejects %s = %p before reaching the adapter", async (field, value) => {
+			const invalid = { ...event, [field]: value } as CreateOutboxEvent;
 
-		const result = await pool.query("SELECT * FROM outbox WHERE id = $1", [id]);
-		const row = result.rows[0];
-		expect(row.aggregate_id).toBe(event.aggregateId);
-		expect(row.aggregate_type).toBe(event.aggregateType);
-		expect(row.event_type).toBe(event.eventType);
+			await expect(client.create(invalid, tx)).rejects.toThrow(
+				new RegExp(`CreateOutboxEvent\\.${field} must be a non-empty string`),
+			);
+			expect(adapter.create).not.toHaveBeenCalled();
+		});
+
+		it("rejects an undefined payload", async () => {
+			const invalid = { ...event, payload: undefined };
+
+			await expect(client.create(invalid, tx)).rejects.toThrow(/CreateOutboxEvent\.payload is required/);
+			expect(adapter.create).not.toHaveBeenCalled();
+		});
+
+		it("accepts a null payload", async () => {
+			await client.create({ ...event, payload: null }, tx);
+
+			expect(adapter.create).toHaveBeenCalledTimes(1);
+		});
+
+		it.each(["", "not-a-uuid", "0190f0e0-0000-7000-8000-00000000000", 123])(
+			"rejects a non-uuid id %p",
+			async (id) => {
+				const invalid = { ...event, id } as CreateOutboxEvent;
+
+				await expect(client.create(invalid, tx)).rejects.toThrow(/CreateOutboxEvent\.id must be a UUID/);
+				expect(adapter.create).not.toHaveBeenCalled();
+			},
+		);
+
+		it("rejects a non-object event", async () => {
+			await expect(client.create(null as never, tx)).rejects.toThrow(/event must be an object/);
+			expect(adapter.create).not.toHaveBeenCalled();
+		});
 	});
 
-	it("persists payload as JSONB", async () => {
-		const id = await client.create(event, { underlying: makePgPrisma(pool) });
+	describe("with the PrismaAdapter", () => {
+		let prismaTx: MockPrismaTransactionClient;
+		let prismaClient: OutboxClient<MockPrismaTransactionClient>;
 
-		const result = await pool.query("SELECT payload FROM outbox WHERE id = $1", [id]);
-		expect(result.rows[0].payload).toEqual(event.payload);
-	});
+		beforeEach(() => {
+			prismaTx = createPrismaTransactionMock();
+			prismaClient = new OutboxClient(new PrismaAdapter());
+		});
 
-	it("sets initial status to PENDING and attempts to 0", async () => {
-		const id = await client.create(event, { underlying: makePgPrisma(pool) });
+		it("inserts through a raw Prisma transaction client and returns the generated uuidv7", async () => {
+			const id = await prismaClient.create(event, prismaTx);
 
-		const result = await pool.query("SELECT status, attempts FROM outbox WHERE id = $1", [id]);
-		const row = result.rows[0];
-		expect(row.status).toBe(OutboxStatus.PENDING);
-		expect(row.attempts).toBe(0);
-	});
+			expect(id).toMatch(UUID_V7);
+			expect(prismaTx.$executeRawUnsafe).toHaveBeenCalledTimes(1);
+			expect(prismaTx.$executeRawUnsafe.mock.calls[0][1]).toBe(id);
+		});
 
-	it("commits insert when transaction is committed", async () => {
-		const pgClient = await pool.connect();
-		await pgClient.query("BEGIN");
-		const id = await client.create(event, { underlying: makePgPrisma(pgClient) });
-		await pgClient.query("COMMIT");
-		pgClient.release();
+		it("uses the caller-provided id for producer-side idempotency", async () => {
+			const providedId = "0190f0e0-1234-7abc-8def-0123456789ab";
 
-		const result = await pool.query("SELECT * FROM outbox WHERE id = $1", [id]);
-		expect(result.rows).toHaveLength(1);
-	});
+			const id = await prismaClient.create({ ...event, id: providedId }, { underlying: prismaTx });
 
-	it("rolls back insert when transaction is rolled back", async () => {
-		const pgClient = await pool.connect();
-		await pgClient.query("BEGIN");
-		const id = await client.create(event, { underlying: makePgPrisma(pgClient) });
-		await pgClient.query("ROLLBACK");
-		pgClient.release();
-
-		const result = await pool.query("SELECT * FROM outbox WHERE id = $1", [id]);
-		expect(result.rows).toHaveLength(0);
+			expect(id).toBe(providedId);
+			expect(prismaTx.$executeRawUnsafe.mock.calls[0][1]).toBe(providedId);
+		});
 	});
 });

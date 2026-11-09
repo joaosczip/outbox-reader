@@ -1,20 +1,14 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
-import { Pool, type PoolClient } from "pg";
-import { PrismaAdapter, type PrismaTransactionClient } from "../../src/adapters/prisma-adapter";
-import { config } from "../../src/config";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { PrismaAdapter, type PrismaAdapterOptions } from "../../src/adapters/prisma-adapter";
 import { OutboxStatus } from "../../src/models/outbox-status";
-
-let pool: Pool;
-let adapter: PrismaAdapter;
-
-function makePgPrisma(client: Pool | PoolClient): PrismaTransactionClient {
-	return {
-		async $executeRawUnsafe(query: string, ...values: unknown[]) {
-			const result = await client.query(query, values);
-			return result.rowCount ?? 0;
-		},
-	};
-}
+import {
+	INVALID_OPTIONS,
+	type MockPrismaTransactionClient,
+	NAMING_CASES,
+	UUID_V7,
+	createPrismaTransactionMock,
+	normalizeSql,
+} from "../mocks/orm";
 
 const event = {
 	aggregateId: "order-1",
@@ -23,86 +17,109 @@ const event = {
 	payload: { total: 100 },
 };
 
-beforeAll(async () => {
-	pool = new Pool({ connectionString: config.databaseUrl });
-
-	await pool.query(`
-    CREATE TABLE IF NOT EXISTS outbox (
-      id UUID PRIMARY KEY,
-      aggregate_id TEXT NOT NULL,
-      aggregate_type TEXT NOT NULL,
-      event_type TEXT NOT NULL,
-      payload JSONB NOT NULL,
-      status TEXT NOT NULL,
-      attempts INTEGER NOT NULL DEFAULT 0,
-      created_at TIMESTAMP NOT NULL
-    )
-  `);
-});
-
-afterAll(async () => {
-	await pool?.query("DROP TABLE IF EXISTS outbox");
-	await pool?.end();
-});
-
-beforeEach(async () => {
-	await pool.query("DELETE FROM outbox");
-	adapter = new PrismaAdapter();
-});
-
 describe("PrismaAdapter", () => {
-	it("returns a valid UUID", async () => {
-		const id = await adapter.create(event, { underlying: makePgPrisma(pool) });
-		expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+	let tx: MockPrismaTransactionClient;
+	let adapter: PrismaAdapter;
+
+	beforeEach(() => {
+		tx = createPrismaTransactionMock();
+		adapter = new PrismaAdapter();
 	});
 
-	it("persists aggregate fields", async () => {
-		const id = await adapter.create(event, { underlying: makePgPrisma(pool) });
+	describe("without the Bun global (Node runtime)", () => {
+		const bun = globalThis.Bun as unknown as Record<string, unknown>;
+		let original: unknown;
 
-		const result = await pool.query("SELECT * FROM outbox WHERE id = $1", [id]);
-		const row = result.rows[0];
-		expect(row.aggregate_id).toBe(event.aggregateId);
-		expect(row.aggregate_type).toBe(event.aggregateType);
-		expect(row.event_type).toBe(event.eventType);
+		beforeEach(() => {
+			original = bun.randomUUIDv7;
+			bun.randomUUIDv7 = () => {
+				throw new ReferenceError("Bun is not defined");
+			};
+		});
+
+		afterEach(() => {
+			bun.randomUUIDv7 = original;
+		});
+
+		it("still generates a uuidv7 id and inserts the record", async () => {
+			const id = await adapter.create(event, { underlying: tx });
+
+			expect(id).toMatch(UUID_V7);
+			expect(tx.$executeRawUnsafe).toHaveBeenCalledTimes(1);
+			expect(tx.$executeRawUnsafe.mock.calls[0][1]).toBe(id);
+		});
 	});
 
-	it("persists payload as JSONB", async () => {
-		const id = await adapter.create(event, { underlying: makePgPrisma(pool) });
+	it("inserts a PENDING record with the event values through the transaction client", async () => {
+		const id = await adapter.create(event, { underlying: tx });
 
-		const result = await pool.query("SELECT payload FROM outbox WHERE id = $1", [id]);
-		expect(result.rows[0].payload).toEqual(event.payload);
+		expect(id).toMatch(UUID_V7);
+		expect(tx.$executeRawUnsafe).toHaveBeenCalledTimes(1);
+		const [sql, ...values] = tx.$executeRawUnsafe.mock.calls[0];
+		expect(normalizeSql(sql)).toBe(NAMING_CASES[0].sql);
+		expect(values).toEqual([
+			id,
+			"order-1",
+			"Order",
+			"order.created",
+			JSON.stringify({ total: 100 }),
+			OutboxStatus.PENDING,
+			0,
+		]);
 	});
 
-	it("sets initial status to PENDING and attempts to 0", async () => {
-		const id = await adapter.create(event, { underlying: makePgPrisma(pool) });
+	it("uses the event id when provided instead of generating one", async () => {
+		const providedId = "0190f0e0-1234-7abc-8def-0123456789ab";
 
-		const result = await pool.query("SELECT status, attempts FROM outbox WHERE id = $1", [id]);
-		const row = result.rows[0];
-		expect(row.status).toBe(OutboxStatus.PENDING);
-		expect(row.attempts).toBe(0);
+		const id = await adapter.create({ ...event, id: providedId }, { underlying: tx });
+
+		expect(id).toBe(providedId);
+		expect(tx.$executeRawUnsafe.mock.calls[0][1]).toBe(providedId);
 	});
 
-	it("commits insert when transaction is committed", async () => {
-		const client = await pool.connect();
-		await client.query("BEGIN");
-		const pgAdapter = new PrismaAdapter();
-		const id = await pgAdapter.create(event, { underlying: makePgPrisma(client) });
-		await client.query("COMMIT");
-		client.release();
-
-		const result = await pool.query("SELECT * FROM outbox WHERE id = $1", [id]);
-		expect(result.rows).toHaveLength(1);
+	it("validates the event before querying the database", async () => {
+		await expect(adapter.create({ ...event, eventType: "" }, { underlying: tx })).rejects.toThrow(
+			/CreateOutboxEvent\.eventType must be a non-empty string/,
+		);
+		expect(tx.$executeRawUnsafe).not.toHaveBeenCalled();
 	});
 
-	it("rolls back insert when transaction is rolled back", async () => {
-		const client = await pool.connect();
-		await client.query("BEGIN");
-		const pgAdapter = new PrismaAdapter();
-		const id = await pgAdapter.create(event, { underlying: makePgPrisma(client) });
-		await client.query("ROLLBACK");
-		client.release();
+	it("generates a distinct id per call", async () => {
+		const first = await adapter.create(event, { underlying: tx });
+		const second = await adapter.create(event, { underlying: tx });
 
-		const result = await pool.query("SELECT * FROM outbox WHERE id = $1", [id]);
-		expect(result.rows).toHaveLength(0);
+		expect(first).not.toBe(second);
+	});
+
+	describe("table and column naming", () => {
+		it.each(NAMING_CASES.map((c) => [c.title, c] as const))(
+			"builds the INSERT for %s",
+			async (_title, testCase) => {
+				const namedAdapter = new PrismaAdapter(testCase.options as PrismaAdapterOptions | undefined);
+
+				const id = await namedAdapter.create(event, { underlying: tx });
+
+				const [sql, ...values] = tx.$executeRawUnsafe.mock.calls[0];
+				expect(normalizeSql(sql)).toBe(testCase.sql);
+				expect(values[0]).toBe(id);
+			},
+		);
+
+		it.each(INVALID_OPTIONS.map((c) => [JSON.stringify(c.options), c] as const))(
+			"rejects invalid options %s at construction",
+			(_title, testCase) => {
+				expect(() => new PrismaAdapter(testCase.options as unknown as PrismaAdapterOptions)).toThrow(
+					testCase.error,
+				);
+			},
+		);
+	});
+
+	it("propagates database errors", async () => {
+		tx.$executeRawUnsafe.mockImplementation(async () => {
+			throw new Error("relation does not exist");
+		});
+
+		await expect(adapter.create(event, { underlying: tx })).rejects.toThrow("relation does not exist");
 	});
 });

@@ -2,7 +2,7 @@
 
 Package: `@joaosczip/outy-cli` (published to npm, MIT)
 
-This is the **developer tooling** package. It provides a CLI (`outy`) and a programmatic API for generating Prisma schemas and database migrations for the outbox table. Does **not** depend on `packages/core`.
+This is the **developer tooling** package. It provides a CLI (`outy`) for creating the replication slot, generating the outbox table (Prisma schema, SQL or Sequelize migration) and installing the client, plus a programmatic API (`PrismaSchemaGenerator`). Does **not** depend on `packages/core`.
 
 ## Commands
 
@@ -13,8 +13,8 @@ bun test
 # Run a single test file
 bun test test/prisma-schema-generator.test.ts
 
-# Run the CLI locally
-bun src/cli/index.ts
+# Run the CLI locally (or `bun run outy <args>` from the workspace root)
+bun src/cli/index.ts --help
 
 # Build (published artifact)
 bun run build
@@ -41,18 +41,19 @@ src/
 │           └── client.ts             — "setup client" subcommand (install outy-client)
 ├── services/
 │   ├── prisma-schema-generator.ts    — generates Prisma model definition for the outbox table
-│   ├── prisma-migration-adapter.ts   — generates Prisma migration SQL
+│   ├── prisma-migration-adapter.ts   — adds the model and runs `prisma migrate dev`
 │   ├── sql-migration-adapter.ts      — generates raw SQL migration
 │   ├── sequelize-migration-adapter.ts — generates Sequelize migration file
 │   ├── migration-adapter.ts          — MigrationAdapter interface
-│   ├── replication-setup.ts          — creates PostgreSQL replication slot and publication
+│   ├── replication-setup.ts          — creates the PostgreSQL logical replication slot (wal2json)
 │   └── client-installer.ts           — installs @joaosczip/outy-client into a target project
 ├── types/
 │   ├── schema-config.ts              — SchemaConfig type (table name, column naming convention)
 │   ├── migration-adapter-config.ts   — MigrationAdapterConfig type
 │   └── replication-config.ts         — ReplicationConfig type
 └── utils/
-    └── column-naming.ts              — column naming convention utilities (snake_case, camelCase, etc.)
+    ├── column-naming.ts              — column naming convention utilities (snake_case, camelCase, etc.)
+    └── replication-messages.ts       — `setup replication` error hints and next steps
 ```
 
 ## Key Services
@@ -60,7 +61,7 @@ src/
 - **`PrismaSchemaGenerator`** (`src/services/prisma-schema-generator.ts`): Generates the Prisma model block for the outbox table. Accepts a `SchemaConfig` to control the table name and column naming convention.
 - **`SqlMigrationAdapter`** (`src/services/sql-migration-adapter.ts`): Generates a raw SQL `CREATE TABLE` migration for the outbox table.
 - **`SequelizeMigrationAdapter`** (`src/services/sequelize-migration-adapter.ts`): Generates a Sequelize migration file for the outbox table.
-- **`ReplicationSetup`** (`src/services/replication-setup.ts`): Creates a PostgreSQL logical replication slot and publication via `pg`.
+- **`ReplicationSetup`** (`src/services/replication-setup.ts`): Creates a PostgreSQL logical replication slot with the `wal2json` plugin via `pg` (no publication: wal2json does not use one).
 
 ## Outbox Indexes
 
@@ -68,11 +69,13 @@ All generators (SQL, Sequelize, Prisma) emit six partial indexes: `idx_<table>_p
 
 ## CLI Binary
 
-The `outy` binary (`bin/outy.js`) wraps `src/cli/index.ts`. Commands:
-- `outy create schema` — generate a Prisma schema snippet for the outbox table
-- `outy create migration` — generate a database migration file
-- `outy setup replication` — configure PostgreSQL logical replication
-- `outy setup client` — install the outy-client package
+The `outy` binary (`bin/outy.js`) is a Node launcher that runs `bun dist/src/cli/index.js` with `spawnSync` and an argv array (never a shell, so arguments such as passwords are passed literally), propagates the exit code/signal and prints a "requires Bun >= 1.2" error when `bun` is missing. `OUTY_CLI_PATH` overrides the CLI path for `test/outy-bin.test.ts` only. `--version` comes from `package.json`. Commands:
+- `outy create schema` — add the outbox model to `schema.prisma` (no migration)
+- `outy create migration` — generate the outbox table: SQL (default, stdout/`--output`), `--target prisma` (schema + `prisma migrate dev`) or `--target sequelize`
+- `outy setup replication` — create the logical replication slot; prints error hints (`src/utils/replication-messages.ts`) and next steps
+- `outy setup client` — install `@joaosczip/outy-client` with the detected package manager
+
+`README.md` documents every command from its real `--help` output; update it whenever an option changes.
 
 ## Test Structure
 

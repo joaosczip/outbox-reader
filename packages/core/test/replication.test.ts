@@ -256,3 +256,185 @@ describe("startReplication wal2json plugin", () => {
 		expect(await renderStartSql(plugin)).toBe(`START_REPLICATION SLOT "outbox_slot" LOGICAL 0/0`);
 	});
 });
+
+describe("startReplication startup errors", () => {
+	let subscribeSpy: ReturnType<typeof spyOn>;
+
+	// Shaped like pg's DatabaseError (message + SQLSTATE code).
+	const pgError = (message: string, code: string) => Object.assign(new Error(message), { code, severity: "ERROR" });
+
+	const start = (connectionString: string, slotName = "outbox_slot") =>
+		startReplication({ connectionString, slotName, onChange: async () => {}, onError: () => {} });
+
+	const rejectionOf = async (promise: Promise<unknown>): Promise<Error & { cause?: unknown }> => {
+		try {
+			await promise;
+		} catch (error) {
+			return error as Error & { cause?: unknown };
+		}
+		throw new Error("expected startReplication to reject");
+	};
+
+	beforeEach(() => {
+		subscribeSpy = spyOn(LogicalReplicationService.prototype, "subscribe");
+	});
+
+	afterEach(() => {
+		subscribeSpy.mockRestore();
+	});
+
+	it("explains how to create a missing replication slot, without leaking the password", async () => {
+		const original = pgError('replication slot "outbox_slot" does not exist', "42704");
+		subscribeSpy.mockRejectedValue(original);
+
+		const error = await rejectionOf(start("postgres://app_user:s3cr3t@localhost:5432/orders?sslmode=require"));
+
+		expect(error.message).toBe(
+			'Replication slot "outbox_slot" does not exist. Create it with: bunx @joaosczip/outy-cli setup replication -u app_user -d orders -s outbox_slot',
+		);
+		expect(error.message).not.toContain("s3cr3t");
+		expect(error.cause).toBe(original);
+	});
+
+	it("adds -h/-p to the slot hint when the host or port differ from the CLI defaults", async () => {
+		subscribeSpy.mockRejectedValue(pgError('replication slot "s1" does not exist', "42704"));
+
+		const error = await rejectionOf(start("postgres://u%40corp:pw@db.internal:6543/my%20db", "s1"));
+
+		expect(error.message).toBe(
+			'Replication slot "s1" does not exist. Create it with: bunx @joaosczip/outy-cli setup replication -u u@corp -d "my db" -s s1 -h db.internal -p 6543',
+		);
+		expect(error.message).not.toContain(":pw");
+	});
+
+	it("uses placeholders in the slot hint when the connection string is not a URL", async () => {
+		subscribeSpy.mockRejectedValue(pgError('replication slot "outbox_slot" does not exist', "42704"));
+
+		const error = await rejectionOf(start("host=localhost user=app password=hunter2 dbname=orders"));
+
+		expect(error.message).toBe(
+			'Replication slot "outbox_slot" does not exist. Create it with: bunx @joaosczip/outy-cli setup replication -u <user> -d <database> -s outbox_slot',
+		);
+		expect(error.message).not.toContain("hunter2");
+	});
+
+	it("explains how to install wal2json when the plugin is missing", async () => {
+		const original = pgError('could not access file "wal2json": No such file or directory', "58P01");
+		subscribeSpy.mockRejectedValue(original);
+
+		const error = await rejectionOf(start("postgres://u:p@localhost:5432/db"));
+
+		expect(error.message).toBe(
+			'The wal2json output plugin is not installed on the PostgreSQL server (could not access file "wal2json": No such file or directory). Install it on the database host, e.g. apt-get install postgresql-<version>-wal2json where <version> is the PostgreSQL major version, and retry.',
+		);
+		expect(error.cause).toBe(original);
+	});
+
+	it("explains how to enable logical decoding when wal_level is too low", async () => {
+		const original = pgError("logical decoding requires wal_level >= logical", "55000");
+		subscribeSpy.mockRejectedValue(original);
+
+		const error = await rejectionOf(start("postgres://u:p@localhost:5432/db"));
+
+		expect(error.message).toBe(
+			"Logical decoding is not enabled on the PostgreSQL server (logical decoding requires wal_level >= logical). Set wal_level=logical (e.g. ALTER SYSTEM SET wal_level = logical, or start postgres with -c wal_level=logical) and restart PostgreSQL.",
+		);
+		expect(error.cause).toBe(original);
+	});
+
+	it("rethrows unrelated errors unchanged", async () => {
+		const original = pgError('password authentication failed for user "u"', "28P01");
+		subscribeSpy.mockRejectedValue(original);
+
+		const error = await rejectionOf(start("postgres://u:p@localhost:5432/db"));
+
+		expect(error).toBe(original);
+	});
+});
+
+describe("startReplication streaming lifecycle", () => {
+	// pg-logical-replication's subscribe() only settles when the stream ends, so
+	// startReplication must resolve on the service's 'start' event instead.
+	let subscribeSpy: ReturnType<typeof spyOn>;
+	let stopSpy: ReturnType<typeof spyOn>;
+	let stream: ReturnType<typeof deferred>;
+	let onError: ReturnType<typeof mock>;
+
+	const start = () =>
+		startReplication({
+			connectionString: "postgres://u:p@localhost:5432/db",
+			slotName: "outbox_slot",
+			onChange: async () => {},
+			onError,
+		});
+
+	beforeEach(() => {
+		stream = deferred();
+		onError = mock((_error: unknown) => {});
+		subscribeSpy = spyOn(LogicalReplicationService.prototype, "subscribe").mockImplementation(function (
+			this: LogicalReplicationService,
+		) {
+			queueMicrotask(() => this.emit("start"));
+			return stream.promise as never;
+		});
+		stopSpy = spyOn(LogicalReplicationService.prototype, "stop").mockImplementation(async function (
+			this: LogicalReplicationService,
+		) {
+			stream.resolve();
+			return this;
+		});
+	});
+
+	afterEach(() => {
+		subscribeSpy.mockRestore();
+		stopSpy.mockRestore();
+	});
+
+	it("resolves with the service once streaming has started, while the stream is still open", async () => {
+		const result = await Promise.race([
+			start(),
+			new Promise((resolve) => setTimeout(() => resolve("timeout"), 200)),
+		]);
+
+		expect(result).toBeInstanceOf(LogicalReplicationService);
+		expect(onError).not.toHaveBeenCalled();
+	});
+
+	it("reports a stream failure after start to onError", async () => {
+		await start();
+		const failure = new Error("connection lost");
+
+		stream.reject(failure);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(onError).toHaveBeenCalledTimes(1);
+		expect(onError).toHaveBeenCalledWith(failure);
+	});
+
+	it("reports an unexpected end of the stream after start to onError", async () => {
+		await start();
+
+		stream.resolve();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(onError).toHaveBeenCalledTimes(1);
+		expect((onError.mock.calls[0][0] as Error).message).toBe("Replication stream ended unexpectedly");
+	});
+
+	it("does not report the end of the stream caused by stop()", async () => {
+		const service = await start();
+
+		await service.stop();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(onError).not.toHaveBeenCalled();
+	});
+
+	it("still rejects with the actionable error when subscribing fails before start", async () => {
+		subscribeSpy.mockImplementation(async () => {
+			throw Object.assign(new Error('replication slot "outbox_slot" does not exist'), { code: "42704" });
+		});
+
+		await expect(start()).rejects.toThrow('Replication slot "outbox_slot" does not exist.');
+	});
+});

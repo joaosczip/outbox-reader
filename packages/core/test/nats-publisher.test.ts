@@ -155,15 +155,35 @@ describe("NATSPublisher", () => {
 
 			const messages = await consumer.fetch({ max_messages: 1, expires: 3_000 });
 
-			let received: { subject: string; data: string } | null = null;
+			let received: { subject: string; data: string; headers: Record<string, string | undefined> } | null = null;
 			for await (const msg of messages) {
-				received = { subject: msg.subject, data: msg.string() };
+				const header = (key: string) => msg.headers?.get(key);
+				received = {
+					subject: msg.subject,
+					data: msg.string(),
+					headers: {
+						msgId: header("Nats-Msg-Id"),
+						id: header("Outbox-Id"),
+						aggregateId: header("Outbox-Aggregate-Id"),
+						aggregateType: header("Outbox-Aggregate-Type"),
+						eventType: header("Outbox-Event-Type"),
+						createdAt: header("Outbox-Created-At"),
+					},
+				};
 				msg.ack();
 				break;
 			}
 
 			expect(received?.subject).toBe(`${SUBJECT_PREFIX}.OrderCreated`);
 			expect(JSON.parse(received?.data ?? "")).toEqual({ orderId: "123" });
+			expect(received?.headers).toEqual({
+				msgId: "2",
+				id: "2",
+				aggregateId: "agg-2",
+				aggregateType: "Order",
+				eventType: "OrderCreated",
+				createdAt: record.createdAt?.toISOString(),
+			});
 		});
 
 		it("does not deduplicate distinct events of the same aggregate", async () => {

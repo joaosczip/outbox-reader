@@ -18,9 +18,14 @@ const retryConfig: RetryConfig = {
 };
 
 type PubAck = { seq: number; duplicate: boolean; stream: string };
-type JsPublish = (subject: string, payload: string, opts?: { msgID?: string }) => Promise<PubAck>;
+type PublishHeaders = { get(key: string): string; has(key: string): boolean; keys(): string[] };
+type JsPublish = (
+	subject: string,
+	payload: string,
+	opts?: { msgID?: string; headers?: PublishHeaders },
+) => Promise<PubAck>;
 
-const buildRecord = (fields: { id: string; aggregateId: string; eventType: string }) =>
+const buildRecord = (fields: { id: string; aggregateId: string; eventType: string; createdAt?: string }) =>
 	new OutboxRecord({
 		...fields,
 		aggregateType: "Order",
@@ -205,6 +210,79 @@ describe("NATSPublisher (unit)", () => {
 
 			expect(logger.logs.filter((l) => l.level === "debug")).toHaveLength(0);
 			expect(logger.logs.filter((l) => l.level === "error")).toHaveLength(1);
+		});
+	});
+
+	describe("headers", () => {
+		const publishedHeaders = (call = 0): PublishHeaders => {
+			const headers = jsPublish.mock.calls[call][2]?.headers;
+			if (!headers) throw new Error("expected headers to be passed to jetstream publish");
+			return headers;
+		};
+
+		it("sends outbox metadata as NATS headers alongside msgID", async () => {
+			const record = buildRecord({
+				id: "evt-1",
+				aggregateId: "order-1",
+				eventType: "OrderCreated",
+				createdAt: "2026-01-02T03:04:05.678Z",
+			});
+
+			await publisher.publish({ record });
+
+			const [subject, , opts] = jsPublish.mock.calls[0];
+			expect(subject).toBe(`${SUBJECT_PREFIX}.OrderCreated`);
+			expect(opts?.msgID).toBe("evt-1");
+			const headers = publishedHeaders();
+			expect(headers.get("Outbox-Id")).toBe("evt-1");
+			expect(headers.get("Outbox-Aggregate-Id")).toBe("order-1");
+			expect(headers.get("Outbox-Aggregate-Type")).toBe("Order");
+			expect(headers.get("Outbox-Event-Type")).toBe("OrderCreated");
+			expect(headers.get("Outbox-Created-At")).toBe("2026-01-02T03:04:05.678Z");
+		});
+
+		it("builds fresh headers per record", async () => {
+			await publisher.publish({ record: buildRecord({ id: "evt-1", aggregateId: "order-1", eventType: "A" }) });
+			await publisher.publish({ record: buildRecord({ id: "evt-2", aggregateId: "order-2", eventType: "B" }) });
+
+			expect(publishedHeaders(0).get("Outbox-Id")).toBe("evt-1");
+			expect(publishedHeaders(1).get("Outbox-Id")).toBe("evt-2");
+			expect(publishedHeaders(1).get("Outbox-Aggregate-Id")).toBe("order-2");
+			expect(publishedHeaders(1).get("Outbox-Event-Type")).toBe("B");
+		});
+
+		it("omits Outbox-Created-At when the record has no createdAt", async () => {
+			const record = buildRecord({ id: "evt-1", aggregateId: "order-1", eventType: "OrderCreated" });
+			record.createdAt = undefined;
+
+			await publisher.publish({ record });
+
+			expect(publishedHeaders().has("Outbox-Created-At")).toBe(false);
+			expect(publishedHeaders().get("Outbox-Id")).toBe("evt-1");
+		});
+	});
+
+	describe("connection logging", () => {
+		it("never logs credentials embedded in server URLs", async () => {
+			const secretPublisher = new NATSPublisher({
+				retryConfig,
+				logger: logger as unknown as Logger,
+				connectionConfig: {
+					servers: ["nats://alice:s3cret@a:4222", "nats://tok3n@b:4222"],
+					pass: "other-secret",
+				},
+				subjectPrefix: SUBJECT_PREFIX,
+			});
+
+			await secretPublisher.connect();
+			await secretPublisher.close();
+
+			const logged = JSON.stringify(logger.logs);
+			expect(logged).not.toContain("s3cret");
+			expect(logged).not.toContain("tok3n");
+			expect(logged).not.toContain("other-secret");
+			expect(logged).toContain("a:4222");
+			expect(logged).toContain("b:4222");
 		});
 	});
 });

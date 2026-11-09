@@ -38,8 +38,8 @@ src/
 ├── outbox-processor.ts           — central orchestrator: filters WAL changes, processes inserts
 ├── outbox-repository.ts          — all DB interactions via pg.Pool with exponential backoff
 ├── nats-publisher.ts             — lazy-connect NATS publisher; implements Publisher interface
-├── publisher-factory.ts          — instantiates publishers from YAML config
-├── publisher-config.ts           — YAML-based publisher configuration types
+├── publisher-factory.ts          — instantiates publishers from the publisher config (only `nats` is implemented)
+├── publisher-config.ts           — publisher config: publisher.yaml + NATS_* env overrides (env-only mode when the file is missing)
 ├── retry-queue.ts                — in-memory retry queue with backoff for non-blocking record retries
 ├── successor-drain.ts            — after a head is published or DEAD, publishes ready successors of that aggregate
 ├── wal-change-handler.ts         — createWalChangeHandler(): WAL onChange (prefetch, per-aggregate ordering, retry enqueue)
@@ -70,8 +70,14 @@ src/
 
 - **`OutboxProcessor`** (`src/outbox-processor.ts`): Filters WAL changes to outbox inserts, fetches from DB, publishes, and marks as PROCESSED/DEAD. `processInserts()` returns `published | already_processed | dead | blocked | lock_miss`. `filterChanges()` and `processInserts()` are separate for independent testing.
 - **`OutboxRepository`** (`src/outbox-repository.ts`): DB layer. Uses `backOff` for `markAsProcessed`/`markAsFailed`/`markAsDead` (optimistic lock on `attempts`; return `false` on a miss). Set-based cron writes: `requeueFailed(ids)` (keeps the original `created_at`, sets `requeued_at = NOW()`) and `markManyAsDead(records)` (return the ids actually changed; missing ids are lock misses). `hasOlderPendingOrFailed` / `findNextReadyPending` implement the per-aggregate gate. Exposes `onTransaction()` for transactional cronjob operations.
-- **`NATSPublisher`** (`src/nats-publisher.ts`): Lazy-connects to NATS on first publish. Uses `record.eventType` as subject, `record.id` as dedup `msgID` (unique per event; a `duplicate` PubAck is logged as a warning).
+- **`NATSPublisher`** (`src/nats-publisher.ts`): Lazy-connects to NATS on first publish. Publishes to `<subjectPrefix>.<record.eventType>` with `record.id` as dedup `msgID` (`Nats-Msg-Id`; unique per event; a `duplicate` PubAck is logged as a warning) and headers `Outbox-Id`, `Outbox-Aggregate-Id`, `Outbox-Aggregate-Type`, `Outbox-Event-Type`, `Outbox-Created-At` (ISO-8601). Subject, body and headers are the public message contract (root `README.md#message-contract`); changing them is breaking.
 - **`RetryQueue`** (`src/retry-queue.ts`): In-memory non-blocking retry queue. WAL stream is never blocked by individual record failures.
+
+## Publisher Configuration
+
+`loadPublisherConfig` reads `PUBLISHER_CONFIG_PATH` (default `./publisher.yaml`). These env vars override the YAML `options`: `NATS_SERVERS` (comma-separated; `TARGET_NATS_URL` is a deprecated alias), `NATS_SUBJECT_PREFIX`, `NATS_USER`, `NATS_PASSWORD`, `NATS_TOKEN`, `NATS_CONNECTION_NAME`. If the file is missing and `NATS_SERVERS` + `NATS_SUBJECT_PREFIX` are set, env-only mode is used; the Docker image does not ship a `publisher.yaml`. `sqs`/`kafka` providers fail fast as not implemented. A JetStream stream covering `<subjectPrefix>.>` must exist before startup.
+
+When behavior visible to users changes (env vars, headers, startup errors, cronjobs), update the root `README.md`, `packages/core/README.md` and `AGENTS.md` (integration guide for agents).
 
 ## Data Flow
 

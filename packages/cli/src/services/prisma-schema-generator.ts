@@ -1,6 +1,7 @@
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import * as path from "node:path";
-import type { OutboxSchemaGenerationOptions, SchemaGenerationConfig } from "../types/schema-config";
+import type { CommandRunner, OutboxSchemaGenerationOptions, SchemaGenerationConfig } from "../types/schema-config";
 import { type ColumnNaming, applyNamingToTableName, getColumnNames } from "../utils/column-naming";
 
 /**
@@ -8,6 +9,8 @@ import { type ColumnNaming, applyNamingToTableName, getColumnNames } from "../ut
  * which the outbox model uses for its partial indexes.
  */
 const PARTIAL_INDEXES_FEATURE = "partialIndexes";
+
+const defaultCommandRunner: CommandRunner = (command, args) => spawnSync(command, args, { stdio: "inherit" });
 
 /**
  * Enables the `partialIndexes` preview feature in the first `generator` block of a schema.
@@ -42,9 +45,11 @@ export function enablePartialIndexesPreviewFeature(schemaContent: string): strin
 
 export class PrismaSchemaGenerator {
 	private config: Required<SchemaGenerationConfig>;
+	private readonly runCommand: CommandRunner;
 
 	constructor(options: OutboxSchemaGenerationOptions = {}) {
 		this.config = this.loadConfig(options);
+		this.runCommand = options.runCommand ?? defaultCommandRunner;
 	}
 
 	private loadConfig(options: OutboxSchemaGenerationOptions): Required<SchemaGenerationConfig> {
@@ -81,10 +86,10 @@ export class PrismaSchemaGenerator {
 		const mapAnnotation = (tsName: string, dbName: string) => (tsName !== dbName ? ` @map("${dbName}")` : "");
 
 		const standardFields = [
-			`id              String   @id @db.Uuid @default(dbgenerated("uuid_generate_v7()"))`,
-			`aggregateId     String   @db.VarChar(50)${mapAnnotation("aggregateId", cols.aggregateId)}`,
-			`aggregateType   String   @db.VarChar(50)${mapAnnotation("aggregateType", cols.aggregateType)}`,
-			`eventType       String   @db.VarChar(50)${mapAnnotation("eventType", cols.eventType)}`,
+			"id              String   @id @db.Uuid @default(uuid(7))",
+			`aggregateId     String   @db.VarChar(255)${mapAnnotation("aggregateId", cols.aggregateId)}`,
+			`aggregateType   String   @db.VarChar(255)${mapAnnotation("aggregateType", cols.aggregateType)}`,
+			`eventType       String   @db.VarChar(255)${mapAnnotation("eventType", cols.eventType)}`,
 			"payload         Json",
 			`sequenceNumber  BigInt?${mapAnnotation("sequenceNumber", cols.sequenceNumber)}`,
 			`createdAt       DateTime @default(now())${mapAnnotation("createdAt", cols.createdAt)}`,
@@ -172,22 +177,33 @@ datasource db {
 			return;
 		}
 
-		const schemaDir = path.dirname(this.config.schemaPath);
-		const migrationsDir = path.join(schemaDir, "migrations");
+		const args = [
+			"prisma",
+			"migrate",
+			"dev",
+			"--name",
+			this.config.migrationName,
+			`--schema=${this.config.schemaPath}`,
+		];
+		const manual = `npx ${args.join(" ")}`;
 
-		try {
-			// Use Prisma CLI to generate migration
-			const { execSync } = require("node:child_process");
-
-			const command = `npx prisma migrate dev --name ${this.config.migrationName} --schema=${this.config.schemaPath}`;
-
-			console.log(`🔄 Generating migration: ${command}`);
-			execSync(command, { stdio: "inherit" });
-			console.log(`✅ Migration '${this.config.migrationName}' generated successfully`);
-		} catch (error) {
-			console.error("❌ Failed to generate migration:", error);
-			console.log("💡 You can manually run: npx prisma migrate dev --name add_outbox_table");
+		console.log(`🔄 Generating migration: ${manual}`);
+		// No shell: the migration name and schema path are passed literally.
+		const result = this.runCommand("npx", args);
+		if (result.error) {
+			throw new Error(
+				`Could not run npx prisma migrate dev (${result.error.message}). Run it manually: ${manual}`,
+				{
+					cause: result.error,
+				},
+			);
 		}
+		if (result.status !== 0) {
+			throw new Error(
+				`prisma migrate dev exited with ${result.status === null ? "a signal" : `code ${result.status}`}. Run it manually: ${manual}`,
+			);
+		}
+		console.log(`✅ Migration '${this.config.migrationName}' generated successfully`);
 	}
 
 	async generate(): Promise<void> {

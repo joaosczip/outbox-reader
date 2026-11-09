@@ -132,13 +132,14 @@ describe("SequelizeMigrationAdapter", () => {
 			await adapter.createMigration({ target: "sequelize" });
 
 			const { content } = writtenFiles[0];
-			expect(content).toContain('CREATE EXTENSION IF NOT EXISTS "pg_uuidv7"');
-			expect(content).toContain("uuid_generate_v7()");
+			expect(content).not.toContain("CREATE EXTENSION");
+			expect(content).not.toContain("uuid_generate_v7");
 			expect(content).toContain("queryInterface.createTable");
 			expect(content).toContain("aggregate_id");
 			expect(content).toContain("aggregate_type");
 			expect(content).toContain("event_type");
-			expect(content).toContain("Sequelize.STRING(50)");
+			expect(content).toContain("Sequelize.STRING(255)");
+			expect(content).not.toContain("Sequelize.STRING(50)");
 			expect(content).toContain("payload");
 			expect(content).toContain("status");
 			expect(content).toContain("attempts");

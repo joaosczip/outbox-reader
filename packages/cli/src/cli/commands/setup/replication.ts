@@ -1,16 +1,26 @@
 import type { ArgumentsCamelCase, Argv } from "yargs";
 import { ReplicationSetupService } from "../../../services/replication-setup";
 import type { ReplicationSetupOptions } from "../../../types/replication-config";
+import {
+	REPLICATION_DOCS_URL,
+	getReplicationErrorHints,
+	getReplicationNextSteps,
+} from "../../../utils/replication-messages";
 
 const PREREQUISITES = `
-The following settings must be set in postgresql.conf (requires server restart):
+Prerequisites (configure these on the PostgreSQL server first):
 
-  wal_level = logical
-  max_wal_senders = 10        (minimum: 1)
-  max_replication_slots = 10  (minimum: 1)
+  postgresql.conf (requires a server restart):
+    wal_level = logical
+    max_wal_senders = 10        (minimum: 1)
+    max_replication_slots = 10  (minimum: 1)
 
-The PostgreSQL user must have LOGIN and REPLICATION roles.
-See pg.conf in this repository for a complete example configuration.
+  The wal2json output plugin must be installed on the server
+  (e.g. apt install postgresql-<version>-wal2json).
+
+  The PostgreSQL user must have the LOGIN and REPLICATION roles.
+
+Full guide: ${REPLICATION_DOCS_URL}
 ---`;
 
 interface SetupReplicationArgs {
@@ -48,8 +58,10 @@ export function builder(yargs: Argv) {
 		.option("password", {
 			alias: "P",
 			type: "string",
-			description: "PostgreSQL password (or set PGPASSWORD env var)",
+			description:
+				"PostgreSQL password. Prefer the PGPASSWORD env var: command-line arguments are visible to other users (e.g. in `ps`)",
 			default: process.env.PGPASSWORD,
+			defaultDescription: "$PGPASSWORD",
 			demandOption: !process.env.PGPASSWORD,
 		})
 		.option("database", {
@@ -85,14 +97,17 @@ export async function handler(argv: ArgumentsCamelCase<SetupReplicationArgs>): P
 
 		if (result.alreadyExists) {
 			console.log(`Replication slot "${result.slotName}" already exists. Nothing to do.`);
-			process.exit(0);
+		} else {
+			console.log(`Replication slot "${result.slotName}" created successfully.`);
 		}
 
-		console.log(`Replication slot "${result.slotName}" created successfully.`);
+		console.log(`\n${getReplicationNextSteps(result.slotName).join("\n")}`);
 		process.exit(0);
 	} catch (error) {
 		console.error("Failed to create replication slot:", error instanceof Error ? error.message : error);
-		console.error("Ensure the PostgreSQL user has the REPLICATION role.");
+		for (const hint of getReplicationErrorHints(error)) {
+			console.error(hint);
+		}
 		process.exit(1);
 	}
 }

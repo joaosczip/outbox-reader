@@ -1,10 +1,37 @@
-import { type JetStreamClient, jetstream } from "@nats-io/jetstream";
-import { type NatsConnection, connect } from "nats";
+import { type JetStreamClient, type JetStreamPublishOptions, jetstream } from "@nats-io/jetstream";
+import { type NatsConnection, connect, headers } from "nats";
 
 import type { Logger } from "./logger";
 import { publishDuration } from "./metrics";
 import type { OutboxRecord } from "./models/outbox-record";
 import type { NATSConnectionConfig, Publisher, RetryConfig } from "./types";
+
+/** NATS header names carrying the outbox record metadata (Nats-Msg-Id is set from record.id via msgID). */
+export const OUTBOX_HEADERS = {
+	id: "Outbox-Id",
+	aggregateId: "Outbox-Aggregate-Id",
+	aggregateType: "Outbox-Aggregate-Type",
+	eventType: "Outbox-Event-Type",
+	createdAt: "Outbox-Created-At",
+} as const;
+
+const buildOutboxHeaders = (record: OutboxRecord): JetStreamPublishOptions["headers"] => {
+	const hdrs = headers();
+	if (record.id) hdrs.set(OUTBOX_HEADERS.id, record.id);
+	hdrs.set(OUTBOX_HEADERS.aggregateId, record.aggregateId);
+	hdrs.set(OUTBOX_HEADERS.aggregateType, record.aggregateType);
+	hdrs.set(OUTBOX_HEADERS.eventType, record.eventType);
+	if (record.createdAt) hdrs.set(OUTBOX_HEADERS.createdAt, record.createdAt.toISOString());
+	// The connection is a `nats` v2 client: it encodes these headers itself, so the
+	// @nats-io/jetstream MsgHdrs type is only a nominal mismatch.
+	return hdrs as unknown as JetStreamPublishOptions["headers"];
+};
+
+/** Strips `user:pass@` / `token@` from server URLs so they can be logged. */
+const redactServers = (servers: string | string[]): string | string[] => {
+	const redact = (server: string) => server.replace(/^([a-z][a-z0-9+.-]*:\/\/)?[^@/]*@/i, "$1***@");
+	return Array.isArray(servers) ? servers.map(redact) : redact(servers);
+};
 
 export class NATSPublisher implements Publisher {
 	private connection: NatsConnection | null = null;
@@ -40,7 +67,7 @@ export class NATSPublisher implements Publisher {
 		this.logger.info({
 			message: "Establishing NATS connection",
 			extra: {
-				servers: this.connectionConfig.servers,
+				servers: redactServers(this.connectionConfig.servers),
 				name: this.connectionConfig.name,
 			},
 		});
@@ -65,7 +92,10 @@ export class NATSPublisher implements Publisher {
 			// msgID must be unique per event: JetStream drops messages with a repeated msgID inside the
 			// duplicate window. record.id keeps retries of the same record deduplicated while letting
 			// distinct events of the same aggregate through.
-			const { seq, duplicate } = await jc.publish(subject, payload, { msgID: record.id });
+			const { seq, duplicate } = await jc.publish(subject, payload, {
+				msgID: record.id,
+				headers: buildOutboxHeaders(record),
+			});
 			publishDuration.record(Date.now() - start, { "event.type": record.eventType, outcome: "success" });
 
 			if (duplicate) {

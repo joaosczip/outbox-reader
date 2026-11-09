@@ -11,6 +11,7 @@ export class PrismaMigrationAdapter implements MigrationAdapter {
 				tableName: options.tableName,
 				migrationName: options.migrationName,
 				generateMigration: true,
+				columnNaming: options.columnNaming,
 			},
 			configPath: options.configPath,
 		});

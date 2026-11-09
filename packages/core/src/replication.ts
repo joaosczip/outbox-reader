@@ -62,6 +62,84 @@ export const buildWal2JsonOptions = (tableName: string): Wal2JsonPluginOptions =
 	includeTypes: false,
 });
 
+const CLI_DEFAULT_HOST = "localhost";
+const CLI_DEFAULT_PORT = "5432";
+
+const shellArg = (value: string): string => (/^[\w@.%+:/=-]+$/.test(value) ? value : JSON.stringify(value));
+
+/**
+ * Builds the `outy setup replication` command for a missing slot. User, database, host
+ * and port come from the connection string when it is a URL (placeholders otherwise);
+ * the password is never included.
+ */
+const buildCreateSlotCommand = (connectionString: string, slotName: string): string => {
+	let user = "<user>";
+	let database = "<database>";
+	const extra: string[] = [];
+
+	if (URL.canParse(connectionString)) {
+		const url = new URL(connectionString);
+		const decode = (value: string) => {
+			try {
+				return decodeURIComponent(value);
+			} catch {
+				return value;
+			}
+		};
+		if (url.username) user = shellArg(decode(url.username));
+		const dbName = decode(url.pathname.replace(/^\//, ""));
+		if (dbName) database = shellArg(dbName);
+		if (url.hostname && url.hostname !== CLI_DEFAULT_HOST) extra.push(`-h ${shellArg(url.hostname)}`);
+		if (url.port && url.port !== CLI_DEFAULT_PORT) extra.push(`-p ${url.port}`);
+	}
+
+	return [
+		`bunx @joaosczip/outy-cli setup replication -u ${user} -d ${database} -s ${shellArg(slotName)}`,
+		...extra,
+	].join(" ");
+};
+
+const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+const errorCode = (error: unknown): string | undefined =>
+	typeof error === "object" && error !== null && "code" in error && typeof error.code === "string"
+		? error.code
+		: undefined;
+
+/**
+ * Turns well-known PostgreSQL replication setup errors into actionable errors (original
+ * kept as `cause`). Any other error is returned unchanged.
+ */
+const toActionableReplicationError = (error: unknown, connectionString: string, slotName: string): unknown => {
+	const message = errorMessage(error);
+
+	// 42704 undefined_object: START_REPLICATION on a slot that does not exist.
+	if (
+		/replication slot ".*" does not exist/.test(message) ||
+		(errorCode(error) === "42704" && /slot/i.test(message))
+	) {
+		return new Error(
+			`Replication slot "${slotName}" does not exist. Create it with: ${buildCreateSlotCommand(connectionString, slotName)}`,
+			{ cause: error },
+		);
+	}
+
+	if (/could not access file "wal2json"/.test(message)) {
+		return new Error(
+			`The wal2json output plugin is not installed on the PostgreSQL server (${message}). Install it on the database host, e.g. apt-get install postgresql-<version>-wal2json where <version> is the PostgreSQL major version, and retry.`,
+			{ cause: error },
+		);
+	}
+
+	if (/wal_level/.test(message)) {
+		return new Error(
+			`Logical decoding is not enabled on the PostgreSQL server (${message}). Set wal_level=logical (e.g. ALTER SYSTEM SET wal_level = logical, or start postgres with -c wal_level=logical) and restart PostgreSQL.`,
+			{ cause: error },
+		);
+	}
+
+	return error;
+};
+
 export const startReplication = async ({
 	connectionString,
 	slotName,
@@ -90,6 +168,39 @@ export const startReplication = async ({
 		}
 	});
 
-	await replicationService.subscribe(plugin, slotName);
+	// A stream that ends because stop() was called is not an error.
+	let stopping = false;
+	const stopService = replicationService.stop.bind(replicationService);
+	replicationService.stop = () => {
+		stopping = true;
+		return stopService();
+	};
+
+	// subscribe() runs START_REPLICATION through client.query(), which only settles when the
+	// stream ends. Resolve once streaming has started ('start') so callers get the handle (to
+	// report readiness and stop it on shutdown); a failure before that rejects. After start,
+	// a stream failure or unexpected end goes to onError.
+	let started = false;
+	const startedSignal = new Promise<void>((resolve) => {
+		replicationService.once("start", () => {
+			started = true;
+			resolve();
+		});
+	});
+	const streaming = replicationService.subscribe(plugin, slotName);
+	streaming.then(
+		() => {
+			if (started && !stopping) onError?.(new Error("Replication stream ended unexpectedly"));
+		},
+		(error: unknown) => {
+			if (started && !stopping) onError?.(error);
+		},
+	);
+
+	try {
+		await Promise.race([startedSignal, streaming]);
+	} catch (error) {
+		throw toActionableReplicationError(error, connectionString, slotName);
+	}
 	return replicationService;
 };

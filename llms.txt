@@ -1,0 +1,34 @@
+# Outbox Reader
+
+> Transactional outbox for PostgreSQL and NATS JetStream. Applications insert events into an outbox table inside their own transaction with `@joaosczip/outy-client`; the Outbox Reader service (run from Docker, not published to npm) streams those inserts from the PostgreSQL WAL via logical replication (wal2json) and publishes them to NATS JetStream with at-least-once delivery. The `@joaosczip/outy-cli` CLI (`outy`, requires Bun) creates the replication slot and the outbox table migration.
+
+Key facts:
+
+- Packages: `@joaosczip/outy-client` (npm, Node.js >= 18 or Bun), `@joaosczip/outy-cli` (npm, run with `bunx`), `@outbox-reader/core` (private; Docker image built from `packages/core/Dockerfile`). `@outbox-reader/client` does not exist.
+- Messages are published to `<NATS_SUBJECT_PREFIX>.<eventType>` with `Nats-Msg-Id` = outbox id and headers `Outbox-Id`, `Outbox-Aggregate-Id`, `Outbox-Aggregate-Type`, `Outbox-Event-Type`, `Outbox-Created-At`. A JetStream stream covering `<prefix>.>` must exist. Consumers must deduplicate on `Outbox-Id`.
+- Table name and column naming must match across the CLI, the client adapter options and the service's `TABLE_NAME` / `COLUMN_NAMING`.
+- `DATABASE_URL` must not contain `?replication=database`.
+
+## Docs
+
+- [AGENTS.md](https://github.com/joaosczip/outbox-reader/blob/main/AGENTS.md): condensed integration checklist, pitfalls and "do not" list for agents
+- [README: Quick Start](https://github.com/joaosczip/outbox-reader/blob/main/README.md#quick-start): ordered setup with verification commands
+- [README: Message contract](https://github.com/joaosczip/outbox-reader/blob/main/README.md#message-contract): subject, body, headers, delivery and ordering guarantees
+- [README: Naming must match everywhere](https://github.com/joaosczip/outbox-reader/blob/main/README.md#naming-must-match-everywhere): table and column naming rule
+- [README: Configuration reference](https://github.com/joaosczip/outbox-reader/blob/main/README.md#configuration-reference): every environment variable
+- [README: Operations](https://github.com/joaosczip/outbox-reader/blob/main/README.md#operations): cronjobs, schedules, Kubernetes, production notes
+- [README: Troubleshooting](https://github.com/joaosczip/outbox-reader/blob/main/README.md#troubleshooting): error messages and fixes
+- [README: PostgreSQL setup in detail](https://github.com/joaosczip/outbox-reader/blob/main/README.md#postgresql-setup-in-detail): wal_level, REPLICATION role, wal2json
+
+## Packages
+
+- [Client README](https://github.com/joaosczip/outbox-reader/blob/main/packages/client/README.md): `@joaosczip/outy-client` API, Prisma and Sequelize adapters, custom adapters
+- [CLI README](https://github.com/joaosczip/outbox-reader/blob/main/packages/cli/README.md): `outy` commands (`setup replication`, `create migration`, `create schema`, `setup client`) and flags
+- [Core README](https://github.com/joaosczip/outbox-reader/blob/main/packages/core/README.md): the service, Docker, cronjobs, health endpoints, programmatic use
+
+## Optional
+
+- [.env.example](https://github.com/joaosczip/outbox-reader/blob/main/.env.example): annotated environment file
+- [publisher.example.yaml](https://github.com/joaosczip/outbox-reader/blob/main/publisher.example.yaml): optional publisher config (retry and reconnect tuning)
+- [docker-compose.yml](https://github.com/joaosczip/outbox-reader/blob/main/docker-compose.yml): local stack (PostgreSQL + wal2json, NATS, service, Prometheus)
+- [CLAUDE.md](https://github.com/joaosczip/outbox-reader/blob/main/CLAUDE.md): contributor guidance for this repository

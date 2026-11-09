@@ -1,6 +1,7 @@
 import type { OutboxAdapter } from "./types/adapter";
 import type { CreateOutboxEvent } from "./types/outbox-event";
-import type { Transaction } from "./types/transaction";
+import type { TransactionInput } from "./types/transaction";
+import { toTransaction, validateOutboxEvent } from "./utils/validation";
 
 export class OutboxClient<TTransaction = unknown> {
 	private readonly adapter: OutboxAdapter<TTransaction>;
@@ -9,7 +10,15 @@ export class OutboxClient<TTransaction = unknown> {
 		this.adapter = adapter;
 	}
 
-	async create(event: CreateOutboxEvent, transaction: Transaction<TTransaction>): Promise<string> {
-		return this.adapter.create(event, transaction);
+	/**
+	 * Writes the event to the outbox table inside `transaction` and returns its id.
+	 *
+	 * @param transaction the ORM transaction (`tx`) or an explicit `{ underlying: tx }` wrapper.
+	 *   Adapters always receive the wrapper form.
+	 */
+	async create(event: CreateOutboxEvent, transaction: TransactionInput<TTransaction>): Promise<string> {
+		const wrapped = toTransaction(transaction);
+		validateOutboxEvent(event);
+		return this.adapter.create(event, wrapped);
 	}
 }

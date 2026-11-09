@@ -1,109 +1,229 @@
-# @outbox-reader/client
+# @joaosczip/outy-client
 
-ORM-agnostic client for creating transactional outbox events. Uses an adapter pattern so you can plug in any database library (Prisma, Sequelize, Knex, raw `pg`, etc.).
+ORM-agnostic client for writing [transactional outbox](https://microservices.io/patterns/data/transactional-outbox.html) events from your application code. The event row is inserted **in the same database transaction** as your domain changes; the [outbox-reader](https://github.com/joaosczip/outbox-reader) service then picks it up from the PostgreSQL WAL and publishes it to NATS JetStream.
+
+- Built-in adapters for **Prisma** and **Sequelize**, or write your own for any driver.
+- Runs on **Node.js >= 18** and **Bun >= 1.2** (no runtime-specific globals, no dependencies).
+- Generates RFC 9562 **UUIDv7** ids (time-ordered), or uses the id you pass.
 
 ## Install
 
 ```bash
-npm add @outbox-reader/client
+npm install @joaosczip/outy-client
 # or
-bun add @outbox-reader/client
+bun add @joaosczip/outy-client
 ```
 
-## Usage
+`@prisma/client` and `sequelize` are optional peer dependencies — install only the one you use.
+
+## Create the outbox table
+
+Use the CLI to generate the canonical table definition instead of writing it by hand:
+
+```bash
+# Print the SQL (default target), or write a Prisma / Sequelize migration
+npx @joaosczip/outy-cli create migration --target sql
+npx @joaosczip/outy-cli create migration --target prisma
+npx @joaosczip/outy-cli create migration --target sequelize
+
+# Custom table / column naming
+npx @joaosczip/outy-cli create migration --table-name outbox_events --column-naming camelCase
+```
+
+Whatever `--table-name` / `--column-naming` you choose there must also be passed to the adapter (see [Table and column naming](#table-and-column-naming)) and to the outbox-reader service (`TABLE_NAME` / `COLUMN_NAMING`).
+
+## Usage with Prisma
 
 ```typescript
-import { OutboxClient } from "@outbox-reader/client";
-import type { OutboxAdapter, Transaction, CreateOutboxEvent } from "@outbox-reader/client";
+import { PrismaClient } from "@prisma/client";
+import { OutboxClient } from "@joaosczip/outy-client";
+import { PrismaAdapter } from "@joaosczip/outy-client/prisma";
 
-// 1. Pick (or write) an adapter for your ORM
-const adapter = new PrismaAdapter(prisma); // example
+const prisma = new PrismaClient();
 
-// 2. Create the client
-const outbox = new OutboxClient(adapter);
+// No PrismaClient is passed here: the adapter writes through the
+// transaction client you hand to `create()`.
+const outbox = new OutboxClient(new PrismaAdapter());
 
-// 3. Create outbox events inside your existing transactions
 await prisma.$transaction(async (tx) => {
-  await tx.order.create({ data: orderData });
+  const order = await tx.order.create({ data: { customerId: "c-1" } });
 
-  await outbox.create(
+  const eventId = await outbox.create(
     {
       aggregateId: order.id,
       aggregateType: "Order",
       eventType: "order.created",
       payload: order,
     },
-    { underlying: tx },
+    tx, // the interactive transaction client
   );
 });
 ```
 
-The `transaction` parameter is **required** — this enforces that outbox inserts always happen inside the same transaction as the domain operation, which is the core guarantee of the transactional outbox pattern.
+The adapter uses `tx.$executeRawUnsafe` with bind parameters (`$1`, `$2`, …); event values are never interpolated into SQL.
 
-## Writing an Adapter
-
-Implement the `OutboxAdapter` interface:
+## Usage with Sequelize
 
 ```typescript
-import type { OutboxAdapter, Transaction, CreateOutboxEvent } from "@outbox-reader/client";
+import { Sequelize } from "sequelize";
+import { OutboxClient } from "@joaosczip/outy-client";
+import { SequelizeAdapter } from "@joaosczip/outy-client/sequelize";
 
-class MyAdapter implements OutboxAdapter<MyTransactionType> {
-  async create(event: CreateOutboxEvent, transaction: Transaction<MyTransactionType>): Promise<string> {
-    const tx = transaction.underlying;
-    // Insert into the outbox table using your ORM/driver
-    // Return the created record's ID
-  }
-}
+const sequelize = new Sequelize(process.env.DATABASE_URL as string);
+const outbox = new OutboxClient(new SequelizeAdapter(sequelize));
+
+await sequelize.transaction(async (t) => {
+  const order = await Order.create({ customerId: "c-1" }, { transaction: t });
+
+  await outbox.create(
+    {
+      aggregateId: String(order.id),
+      aggregateType: "Order",
+      eventType: "order.created",
+      payload: order.toJSON(),
+    },
+    t, // the Sequelize transaction
+  );
+});
 ```
 
-The adapter is responsible for:
-- Inserting a row into the `outbox` table with the event fields
-- Setting `status` to `PENDING` and generating an ID
-- Using the provided transaction to ensure atomicity
+## Passing the transaction
+
+The transaction argument is **required**: writing the outbox row atomically with your domain changes is the whole point of the pattern. Two forms are accepted:
+
+```typescript
+await outbox.create(event, tx);                 // the ORM transaction itself
+await outbox.create(event, { underlying: tx }); // explicit wrapper (original API, still supported)
+```
+
+A value is treated as the wrapper only when it has an **own** `underlying` property; anything else is treated as the raw transaction. Adapters always receive the wrapper form (`transaction.underlying`).
+
+## Event ids and idempotency
+
+`create()` returns the id of the inserted row. By default a new UUIDv7 is generated. To make producing idempotent, pass your own UUID:
+
+```typescript
+await outbox.create({ id: deterministicUuid, aggregateId, aggregateType, eventType, payload }, tx);
+```
+
+The id is the table's primary key (a second insert with the same id fails) and is used by outbox-reader as the NATS JetStream dedup `msgID`. Consumers should still be idempotent: delivery is at-least-once.
+
+## Validation
+
+Before any query is sent, `create()` validates the event and throws a descriptive `TypeError` when:
+
+- `aggregateId`, `aggregateType` or `eventType` is not a non-empty string,
+- `payload` is `undefined` (use `null` for "no data"), a function or a symbol,
+- `id` is given but is not a UUID string,
+- the transaction is missing (`undefined` / `null`).
+
+Adapter options are validated in the adapter constructor.
+
+## Table and column naming
+
+Both adapters take an optional options object:
+
+```typescript
+new PrismaAdapter({ tableName: "outbox_events", columnNaming: "camelCase" });
+new SequelizeAdapter(sequelize, { tableName: "outbox_events", columnNaming: "camelCase" });
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `tableName` | `string` | `"outbox"` | Logical table name, `_`-separated. Must equal the CLI's `--table-name` and core's `TABLE_NAME`. |
+| `columnNaming` | `"snake_case" \| "camelCase" \| "PascalCase"` | `"snake_case"` | Must equal the CLI's `--column-naming` and core's `COLUMN_NAMING`. |
+
+The naming applies to the table name too, exactly like the CLI and core do. All identifiers are double-quoted, so mixed case is preserved:
+
+| `tableName` | `columnNaming` | Physical table | Example columns |
+|-------------|----------------|----------------|-----------------|
+| `outbox` | `snake_case` | `"outbox"` | `"aggregate_id"`, `"event_type"`, `"created_at"` |
+| `outbox_events` | `camelCase` | `"outboxEvents"` | `"aggregateId"`, `"eventType"`, `"createdAt"` |
+| `outbox` | `PascalCase` | `"Outbox"` | `"AggregateId"`, `"EventType"`, `"CreatedAt"` |
+
+`id`, `payload`, `status` and `attempts` keep the same name in every mode.
+
+## Writing a custom adapter
+
+Implement `OutboxAdapter` for any driver (Knex, Drizzle, raw `pg`, …):
+
+```typescript
+import type { CreateOutboxEvent, OutboxAdapter, Transaction } from "@joaosczip/outy-client";
+import type { PoolClient } from "pg";
+import { randomUUID } from "node:crypto";
+
+class PgAdapter implements OutboxAdapter<PoolClient> {
+  async create(event: CreateOutboxEvent, transaction: Transaction<PoolClient>): Promise<string> {
+    const id = event.id ?? randomUUID();
+    await transaction.underlying.query(
+      `INSERT INTO "outbox" ("id", "aggregate_id", "aggregate_type", "event_type", "payload", "status", "attempts", "created_at")
+       VALUES ($1, $2, $3, $4, $5, 'PENDING', 0, NOW())`,
+      [id, event.aggregateId, event.aggregateType, event.eventType, JSON.stringify(event.payload)],
+    );
+    return id;
+  }
+}
+
+const outbox = new OutboxClient(new PgAdapter());
+await outbox.create(event, poolClient); // inside BEGIN ... COMMIT
+```
+
+An adapter must:
+
+- insert into the same table/columns the migration created (and core reads),
+- set `status` to `PENDING` and `attempts` to `0`,
+- use `event.id` when present, otherwise generate one, and return the id,
+- run the insert on `transaction.underlying`.
+
+`OutboxClient` validates the event and normalises the transaction before calling your adapter.
 
 ## API
 
 ### `OutboxClient<TTransaction>`
 
-| Method | Description |
+| Member | Description |
 |--------|-------------|
-| `constructor(adapter: OutboxAdapter<TTransaction>)` | Create a client with the given adapter |
-| `create(event: CreateOutboxEvent, transaction: Transaction<TTransaction>): Promise<string>` | Insert an outbox record within the transaction. Returns the record ID. |
+| `new OutboxClient(adapter: OutboxAdapter<TTransaction>)` | Create a client backed by `adapter`. `TTransaction` is inferred from the adapter. |
+| `create(event: CreateOutboxEvent, transaction: TTransaction \| Transaction<TTransaction>): Promise<string>` | Validate and insert the event within the transaction. Resolves to the record id. |
+
+### Adapters
+
+| Import | Constructor | Transaction type |
+|--------|-------------|------------------|
+| `@joaosczip/outy-client/prisma` | `new PrismaAdapter(options?: PrismaAdapterOptions)` | Prisma interactive transaction client (`$executeRawUnsafe`) |
+| `@joaosczip/outy-client/sequelize` | `new SequelizeAdapter(sequelize, options?: SequelizeAdapterOptions)` | Sequelize `Transaction` |
+
+Both option types are `OutboxTableOptions` (`{ tableName?, columnNaming? }`). The adapters are also exported from the package root.
 
 ### `CreateOutboxEvent`
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `aggregateId` | `string` | ID of the domain entity |
-| `aggregateType` | `string` | Type of the domain entity (e.g. `"Order"`) |
-| `eventType` | `string` | Event name (e.g. `"order.created"`) |
-| `payload` | `unknown` | Event payload |
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `id` | `string` (UUID) | no | Record id; generated (UUIDv7) when omitted |
+| `aggregateId` | `string` | yes | Id of the domain entity; events of one aggregate are published in order |
+| `aggregateType` | `string` | yes | Domain entity name (e.g. `"Order"`) |
+| `eventType` | `string` | yes | Event name, used as the NATS subject (e.g. `"order.created"`) |
+| `payload` | `unknown` | yes | JSON-serialisable data stored as JSONB (`null` allowed) |
 
-### `Transaction<T>`
+### `Transaction<T>` / `TransactionInput<T>`
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `underlying` | `T` | The ORM-specific transaction object |
+| Type | Definition |
+|------|------------|
+| `Transaction<T>` | `{ readonly underlying: T }` — what adapters receive |
+| `TransactionInput<T>` | `T \| Transaction<T>` — what `OutboxClient.create()` accepts |
 
 ### `OutboxStatus`
 
-Enum with values: `PENDING`, `PROCESSED`, `FAILED`, `DEAD` (terminal: max attempts reached, never retried).
+Enum: `PENDING`, `PROCESSED`, `FAILED`, `DEAD` (terminal: max attempts reached, never retried).
 
-## Outbox Table Schema
+### Other exported types
 
-The adapter should insert into a table with the following structure (column names use `snake_case`):
+`OutboxAdapter`, `OutboxTableOptions`, `ColumnNaming`, `PrismaTransactionClient`, `PrismaAdapterOptions`, `SequelizeLike`, `SequelizeTransaction`, `SequelizeAdapterOptions`.
 
-```sql
-CREATE TABLE outbox (
-    id VARCHAR(255) PRIMARY KEY,
-    aggregate_id VARCHAR(255) NOT NULL,
-    aggregate_type VARCHAR(255) NOT NULL,
-    event_type VARCHAR(255) NOT NULL,
-    payload JSONB NOT NULL,
-    sequence_number BIGINT NULL,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    processed_at TIMESTAMP NULL,
-    status VARCHAR(50) NOT NULL DEFAULT 'PENDING',
-    attempts INTEGER NOT NULL DEFAULT 0
-);
-```
+## Examples
+
+See [`examples/prisma`](./examples/prisma/index.ts) and [`examples/sequelize`](./examples/sequelize/index.ts).
+
+## License
+
+MIT

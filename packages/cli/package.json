@@ -26,7 +26,7 @@
 	},
 	"scripts": {
 		"build": "rm -rf dist && bun build src/index.ts --outdir dist/src --target bun --external pg --external yargs && bun build src/cli/index.ts --outdir dist/src/cli --target bun --external pg --external yargs",
-		"generate": "bun src/cli/index.ts",
+		"generate": "bun src/cli/index.ts create schema",
 		"cli": "bun src/cli/index.ts",
 		"lint": "biome check src/",
 		"test": "bun test",

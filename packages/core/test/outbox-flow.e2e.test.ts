@@ -1,17 +1,21 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { jetstream } from "@nats-io/jetstream";
-import { type JetStreamManager, jetstreamManager } from "@nats-io/jetstream";
+import { type JetStreamManager, jetstream, jetstreamManager } from "@nats-io/jetstream";
 import { type NatsConnection, connect } from "nats";
-import pAll from "p-all";
 import { Pool } from "pg";
-import { LogicalReplicationService, type Wal2Json, Wal2JsonPlugin } from "pg-logical-replication";
+import type { LogicalReplicationService } from "pg-logical-replication";
 
 import { Logger } from "../src/logger";
 import { NATSPublisher } from "../src/nats-publisher";
 import { OutboxProcessor } from "../src/outbox-processor";
 import { OutboxRepository } from "../src/outbox-repository";
+import { startReplication } from "../src/replication";
+import { RetryQueue } from "../src/retry-queue";
 import type { RetryConfig } from "../src/types";
+import { createWalChangeHandler } from "../src/wal-change-handler";
 import { testConfig } from "./setup";
+
+// The publisher sends to `<prefix>.<eventType>`; the stream covers `<prefix>.>`.
+const SUBJECT_PREFIX = testConfig.testSubjectPrefix.replace(/\.$/, "");
 
 const dbRetryConfig: RetryConfig = {
 	jitter: "full",
@@ -46,6 +50,8 @@ describe("Outbox Flow E2E", () => {
 	let outboxProcessor: OutboxProcessor;
 	let natsPublisher: NATSPublisher;
 	let replicationService: LogicalReplicationService;
+	let retryQueue: RetryQueue;
+	const replicationErrors: unknown[] = [];
 	let natsConn: NatsConnection;
 	let jsm: JetStreamManager;
 	const logger = new Logger("e2e-test");
@@ -54,19 +60,21 @@ describe("Outbox Flow E2E", () => {
 	beforeAll(async () => {
 		pool = new Pool({ connectionString: testConfig.connectionString, max: 5 });
 
+		// Same shape as `outy create migration` (id UUID: the predecessor check casts to uuid).
+		await pool.query("DROP TABLE IF EXISTS outbox");
 		await pool.query(`
-			CREATE TABLE IF NOT EXISTS outbox (
-				id VARCHAR(255) PRIMARY KEY,
+			CREATE TABLE outbox (
+				id UUID PRIMARY KEY,
 				aggregate_id VARCHAR(255) NOT NULL,
 				aggregate_type VARCHAR(255) NOT NULL,
 				event_type VARCHAR(255) NOT NULL,
 				payload JSONB NOT NULL,
-				sequence_number BIGINT NULL,
+				status TEXT NOT NULL DEFAULT 'PENDING',
+				attempts INTEGER NOT NULL DEFAULT 0,
 				created_at TIMESTAMP NOT NULL DEFAULT NOW(),
 				processed_at TIMESTAMP NULL,
 				requeued_at TIMESTAMP NULL,
-				status VARCHAR(50) NOT NULL DEFAULT 'PENDING',
-				attempts INTEGER NOT NULL DEFAULT 0
+				sequence_number BIGINT NULL
 			)
 		`);
 
@@ -84,56 +92,59 @@ describe("Outbox Flow E2E", () => {
 			subjects: [`${testConfig.testSubjectPrefix}>`],
 		});
 
-		// Wire up application components
+		// Wire up application components exactly like app.ts
 		outboxRepository = new OutboxRepository({ pool, retryConfig: dbRetryConfig });
 		natsPublisher = new NATSPublisher({
 			logger,
 			retryConfig: natsRetryConfig,
 			connectionConfig: { servers: testConfig.natsUrl, name: "e2e-test-publisher" },
+			subjectPrefix: SUBJECT_PREFIX,
 		});
 		outboxProcessor = new OutboxProcessor({ outboxRepository, logger, maxAttempts: natsRetryConfig.numOfAttempts });
-
 		await natsPublisher.connect();
+
+		retryQueue = new RetryQueue({
+			processor: outboxProcessor,
+			publisher: natsPublisher,
+			outboxRepository,
+			logger,
+			config: natsRetryConfig,
+			maxAttempts: natsRetryConfig.numOfAttempts,
+		});
 
 		// Create the replication slot before subscribing
 		const replPool = new Pool({ connectionString: `${testConfig.connectionString}?replication=database`, max: 1 });
 		await replPool.query(`CREATE_REPLICATION_SLOT "${testConfig.replicationSlot}" LOGICAL wal2json`);
 		await replPool.end();
 
-		// Start WAL replication (mirrors app.ts wiring)
-		replicationService = new LogicalReplicationService(
-			{ connectionString: `${testConfig.connectionString}?replication=database` },
-			{ flowControl: { enabled: true }, acknowledge: { auto: true, timeoutSeconds: 0 } },
-		);
-
-		replicationService.on("data", async (_lsn: string, log: Wal2Json.Output) => {
-			const outboxRecords = outboxProcessor.filterChanges(log);
-
-			const ids = outboxRecords.map((r) => r.id as string);
-			const fetchedRecords = await outboxRepository.findUnprocessedByIds(ids);
-			const fetchedMap = new Map(fetchedRecords.map((r) => [r.id, r]));
-
-			await pAll(
-				outboxRecords.map(
-					(record) => () =>
-						outboxProcessor.processInserts({
-							insertedRecord: record,
-							prefetchedOutbox: fetchedMap.get(record.id as string) ?? null,
-							publisher: natsPublisher,
-						}),
-				),
-				{ concurrency: 5 },
-			);
-		});
-
-		const plugin = new Wal2JsonPlugin();
-		replicationService.subscribe(plugin, testConfig.replicationSlot);
+		// startReplication must resolve once streaming has started (it used to hang until the
+		// stream ended), so the race below fails the suite if it regresses.
+		replicationService = await Promise.race([
+			startReplication({
+				connectionString: testConfig.connectionString,
+				slotName: testConfig.replicationSlot,
+				tableName: "outbox",
+				onChange: createWalChangeHandler({
+					processor: outboxProcessor,
+					repository: outboxRepository,
+					publisher: natsPublisher,
+					retryQueue,
+					logger,
+					concurrency: 5,
+				}),
+				onError: (error) => replicationErrors.push(error),
+			}),
+			new Promise<never>((_, reject) =>
+				setTimeout(() => reject(new Error("startReplication did not resolve after streaming started")), 10_000),
+			),
+		]);
 
 		// Give replication a moment to establish
 		await new Promise((resolve) => setTimeout(resolve, 1000));
 	}, 30_000);
 
 	afterAll(async () => {
+		retryQueue?.stop();
 		await replicationService?.stop().catch(() => {});
 
 		// Clean up test records
@@ -157,7 +168,7 @@ describe("Outbox Flow E2E", () => {
 		const aggregateId = crypto.randomUUID();
 		const recordId = crypto.randomUUID();
 		const payload = JSON.stringify({ orderId: "123", amount: 99.99 });
-		const eventType = `${testConfig.testSubjectPrefix}order_created`;
+		const eventType = "order_created";
 
 		insertedIds.push(recordId);
 
@@ -182,19 +193,37 @@ describe("Outbox Flow E2E", () => {
 		const consumer = await js.consumers.get(testConfig.streamName);
 		const messages = await consumer.fetch({ max_messages: 1, expires: 5_000 });
 
-		let receivedMessage: { subject: string; data: string } | null = null;
+		let receivedMessage: { subject: string; data: string; headers: Record<string, string | undefined> } | null =
+			null;
 		for await (const msg of messages) {
 			receivedMessage = {
 				subject: msg.subject,
 				data: msg.string(),
+				headers: {
+					msgId: msg.headers?.get("Nats-Msg-Id"),
+					id: msg.headers?.get("Outbox-Id"),
+					aggregateId: msg.headers?.get("Outbox-Aggregate-Id"),
+					aggregateType: msg.headers?.get("Outbox-Aggregate-Type"),
+					eventType: msg.headers?.get("Outbox-Event-Type"),
+					createdAt: msg.headers?.get("Outbox-Created-At"),
+				},
 			};
 			msg.ack();
 			break;
 		}
 
 		expect(receivedMessage).not.toBeNull();
-		expect(receivedMessage?.subject).toBe(eventType);
+		expect(receivedMessage?.subject).toBe(`${SUBJECT_PREFIX}.${eventType}`);
 		expect(JSON.parse(receivedMessage?.data ?? "")).toEqual(JSON.parse(payload));
+		expect(receivedMessage?.headers).toMatchObject({
+			msgId: recordId,
+			id: recordId,
+			aggregateId,
+			aggregateType: "Order",
+			eventType,
+		});
+		expect(Number.isNaN(Date.parse(receivedMessage?.headers.createdAt ?? ""))).toBe(false);
+		expect(replicationErrors).toEqual([]);
 	}, 20_000);
 
 	it("processes multiple outbox records", async () => {
@@ -202,19 +231,19 @@ describe("Outbox Flow E2E", () => {
 			{
 				id: crypto.randomUUID(),
 				aggregateId: crypto.randomUUID(),
-				eventType: `${testConfig.testSubjectPrefix}user_created`,
+				eventType: "user_created",
 				payload: JSON.stringify({ userId: "u1" }),
 			},
 			{
 				id: crypto.randomUUID(),
 				aggregateId: crypto.randomUUID(),
-				eventType: `${testConfig.testSubjectPrefix}payment_received`,
+				eventType: "payment_received",
 				payload: JSON.stringify({ paymentId: "p1", amount: 50 }),
 			},
 			{
 				id: crypto.randomUUID(),
 				aggregateId: crypto.randomUUID(),
-				eventType: `${testConfig.testSubjectPrefix}item_shipped`,
+				eventType: "item_shipped",
 				payload: JSON.stringify({ shipmentId: "s1" }),
 			},
 		];
@@ -260,7 +289,7 @@ describe("Outbox Flow E2E", () => {
 			msg.ack();
 		}
 
-		const expectedSubjects = records.map((r) => r.eventType);
+		const expectedSubjects = records.map((r) => `${SUBJECT_PREFIX}.${r.eventType}`);
 		for (const subject of expectedSubjects) {
 			expect(receivedSubjects).toContain(subject);
 		}
