@@ -73,25 +73,22 @@ export class SequelizeMigrationAdapter implements MigrationAdapter {
 
 module.exports = {
   async up(queryInterface, Sequelize) {
-    await queryInterface.sequelize.query('CREATE EXTENSION IF NOT EXISTS "pg_uuidv7"');
-
     await queryInterface.createTable("${tableName}", {
       ${cols.id}: {
         type: Sequelize.UUID,
         primaryKey: true,
         allowNull: false,
-        defaultValue: Sequelize.literal("uuid_generate_v7()"),
       },
       ${cols.aggregateId}: {
-        type: Sequelize.STRING(50),
+        type: Sequelize.STRING(255),
         allowNull: false,
       },
       ${cols.aggregateType}: {
-        type: Sequelize.STRING(50),
+        type: Sequelize.STRING(255),
         allowNull: false,
       },
       ${cols.eventType}: {
-        type: Sequelize.STRING(50),
+        type: Sequelize.STRING(255),
         allowNull: false,
       },
       ${cols.payload}: {

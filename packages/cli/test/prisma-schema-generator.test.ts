@@ -41,8 +41,10 @@ describe("PrismaSchemaGenerator", () => {
 		expect(content).toContain("eventType");
 		expect(content).toContain("payload");
 		expect(content).toContain("@db.Uuid");
-		expect(content).toContain('dbgenerated("uuid_generate_v7()")');
-		expect(content).toContain("@db.VarChar(50)");
+		expect(content).toContain("@default(uuid(7))");
+		expect(content).not.toContain("dbgenerated");
+		expect(content).toContain("@db.VarChar(255)");
+		expect(content).not.toContain("@db.VarChar(50)");
 	});
 
 	it("should append to existing schema file", async () => {
@@ -122,7 +124,7 @@ model User {
 		await generator.generateSchema();
 
 		const content = fs.readFileSync(testSchemaPath, "utf-8");
-		expect(content).toContain("aggregateId     String   @db.VarChar(50)");
+		expect(content).toContain("aggregateId     String   @db.VarChar(255)");
 		expect(content).not.toContain('@map("aggregate_id")');
 		expect(content).not.toContain('@map("aggregateId")');
 		expect(content).toContain('@@map("outbox")');

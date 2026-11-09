@@ -22,12 +22,13 @@ describe("SqlMigrationAdapter", () => {
 			stdoutSpy.mockRestore();
 
 			const sql = written.join("");
-			expect(sql).toContain('CREATE EXTENSION IF NOT EXISTS "pg_uuidv7"');
+			expect(sql).not.toContain("CREATE EXTENSION");
+			expect(sql).not.toContain("uuid_generate_v7");
 			expect(sql).toContain('CREATE TABLE IF NOT EXISTS "outbox" (');
-			expect(sql).toContain('"id" UUID PRIMARY KEY DEFAULT uuid_generate_v7()');
-			expect(sql).toContain('"aggregate_id" VARCHAR(50) NOT NULL');
-			expect(sql).toContain('"aggregate_type" VARCHAR(50) NOT NULL');
-			expect(sql).toContain('"event_type" VARCHAR(50) NOT NULL');
+			expect(sql).toContain('"id" UUID PRIMARY KEY,');
+			expect(sql).toContain('"aggregate_id" VARCHAR(255) NOT NULL');
+			expect(sql).toContain('"aggregate_type" VARCHAR(255) NOT NULL');
+			expect(sql).toContain('"event_type" VARCHAR(255) NOT NULL');
 			expect(sql).toContain('"payload" JSONB NOT NULL');
 			expect(sql).toContain(`"status" TEXT NOT NULL DEFAULT 'PENDING'`);
 			expect(sql).toContain('"attempts" INTEGER NOT NULL DEFAULT 0');
@@ -69,9 +70,9 @@ describe("SqlMigrationAdapter", () => {
 			// Regression: identifiers must be quoted, otherwise Postgres folds them to lowercase
 			// and the columns no longer match the quoted names core (and Prisma) use.
 			expect(sql).toContain('CREATE TABLE IF NOT EXISTS "outbox"');
-			expect(sql).toContain('"aggregateId" VARCHAR(50) NOT NULL');
-			expect(sql).toContain('"aggregateType" VARCHAR(50) NOT NULL');
-			expect(sql).toContain('"eventType" VARCHAR(50) NOT NULL');
+			expect(sql).toContain('"aggregateId" VARCHAR(255) NOT NULL');
+			expect(sql).toContain('"aggregateType" VARCHAR(255) NOT NULL');
+			expect(sql).toContain('"eventType" VARCHAR(255) NOT NULL');
 			expect(sql).toContain('"sequenceNumber" BIGINT');
 			expect(sql).toContain('"createdAt" TIMESTAMP NOT NULL DEFAULT NOW()');
 			expect(sql).toContain('"processedAt" TIMESTAMP');
@@ -112,7 +113,7 @@ describe("SqlMigrationAdapter", () => {
 
 			const sql = written.join("");
 			expect(sql).toContain('CREATE TABLE IF NOT EXISTS "Outbox"');
-			expect(sql).toContain('"AggregateId" VARCHAR(50) NOT NULL');
+			expect(sql).toContain('"AggregateId" VARCHAR(255) NOT NULL');
 			expect(sql).toContain("AggregateType");
 			expect(sql).toContain("EventType");
 			expect(sql).toContain("SequenceNumber");

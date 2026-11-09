@@ -81,10 +81,10 @@ export class PrismaSchemaGenerator {
 		const mapAnnotation = (tsName: string, dbName: string) => (tsName !== dbName ? ` @map("${dbName}")` : "");
 
 		const standardFields = [
-			`id              String   @id @db.Uuid @default(dbgenerated("uuid_generate_v7()"))`,
-			`aggregateId     String   @db.VarChar(50)${mapAnnotation("aggregateId", cols.aggregateId)}`,
-			`aggregateType   String   @db.VarChar(50)${mapAnnotation("aggregateType", cols.aggregateType)}`,
-			`eventType       String   @db.VarChar(50)${mapAnnotation("eventType", cols.eventType)}`,
+			`id              String   @id @db.Uuid @default(uuid(7))`,
+			`aggregateId     String   @db.VarChar(255)${mapAnnotation("aggregateId", cols.aggregateId)}`,
+			`aggregateType   String   @db.VarChar(255)${mapAnnotation("aggregateType", cols.aggregateType)}`,
+			`eventType       String   @db.VarChar(255)${mapAnnotation("eventType", cols.eventType)}`,
 			"payload         Json",
 			`sequenceNumber  BigInt?${mapAnnotation("sequenceNumber", cols.sequenceNumber)}`,
 			`createdAt       DateTime @default(now())${mapAnnotation("createdAt", cols.createdAt)}`,

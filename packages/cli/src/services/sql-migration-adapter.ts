@@ -26,13 +26,11 @@ export class SqlMigrationAdapter implements MigrationAdapter {
 		// instead of being folded to lowercase by PostgreSQL.
 		const q = quoteIdent;
 		const t = q(tableName);
-		return `CREATE EXTENSION IF NOT EXISTS "pg_uuidv7";
-
-CREATE TABLE IF NOT EXISTS ${t} (
-  ${q(cols.id)} UUID PRIMARY KEY DEFAULT uuid_generate_v7(),
-  ${q(cols.aggregateId)} VARCHAR(50) NOT NULL,
-  ${q(cols.aggregateType)} VARCHAR(50) NOT NULL,
-  ${q(cols.eventType)} VARCHAR(50) NOT NULL,
+		return `CREATE TABLE IF NOT EXISTS ${t} (
+  ${q(cols.id)} UUID PRIMARY KEY,
+  ${q(cols.aggregateId)} VARCHAR(255) NOT NULL,
+  ${q(cols.aggregateType)} VARCHAR(255) NOT NULL,
+  ${q(cols.eventType)} VARCHAR(255) NOT NULL,
   ${q(cols.payload)} JSONB NOT NULL,
   ${q(cols.status)} TEXT NOT NULL DEFAULT 'PENDING',
   ${q(cols.attempts)} INTEGER NOT NULL DEFAULT 0,
