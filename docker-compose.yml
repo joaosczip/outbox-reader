@@ -80,12 +80,17 @@ services:
         container_name: outbox-reader
         restart: on-failure
         depends_on:
-            - db
-            - nats
+            db:
+                condition: service_started
+            nats-init:
+                condition: service_completed_successfully
         environment:
             DATABASE_URL: postgres://root:root@db:5432/outbox
             REPLICATION_SLOT_NAME: outbox_slot
-            TARGET_NATS_URL: nats://nats:4222
+            # Env-only NATS config (no publisher.yaml in the image). The prefix matches the
+            # TEST stream (subjects 'test.>') created by nats-init.
+            NATS_SERVERS: nats://nats:4222
+            NATS_SUBJECT_PREFIX: test
             PORT: "4599"
             LOG_LEVEL: debug
             PROMETHEUS_PORT: "9464"
