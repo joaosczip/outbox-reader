@@ -351,3 +351,90 @@ describe("startReplication startup errors", () => {
 		expect(error).toBe(original);
 	});
 });
+
+describe("startReplication streaming lifecycle", () => {
+	// pg-logical-replication's subscribe() only settles when the stream ends, so
+	// startReplication must resolve on the service's 'start' event instead.
+	let subscribeSpy: ReturnType<typeof spyOn>;
+	let stopSpy: ReturnType<typeof spyOn>;
+	let stream: ReturnType<typeof deferred>;
+	let onError: ReturnType<typeof mock>;
+
+	const start = () =>
+		startReplication({
+			connectionString: "postgres://u:p@localhost:5432/db",
+			slotName: "outbox_slot",
+			onChange: async () => {},
+			onError,
+		});
+
+	beforeEach(() => {
+		stream = deferred();
+		onError = mock((_error: unknown) => {});
+		subscribeSpy = spyOn(LogicalReplicationService.prototype, "subscribe").mockImplementation(function (
+			this: LogicalReplicationService,
+		) {
+			queueMicrotask(() => this.emit("start"));
+			return stream.promise as never;
+		});
+		stopSpy = spyOn(LogicalReplicationService.prototype, "stop").mockImplementation(async function (
+			this: LogicalReplicationService,
+		) {
+			stream.resolve();
+			return this;
+		});
+	});
+
+	afterEach(() => {
+		subscribeSpy.mockRestore();
+		stopSpy.mockRestore();
+	});
+
+	it("resolves with the service once streaming has started, while the stream is still open", async () => {
+		const result = await Promise.race([
+			start(),
+			new Promise((resolve) => setTimeout(() => resolve("timeout"), 200)),
+		]);
+
+		expect(result).toBeInstanceOf(LogicalReplicationService);
+		expect(onError).not.toHaveBeenCalled();
+	});
+
+	it("reports a stream failure after start to onError", async () => {
+		await start();
+		const failure = new Error("connection lost");
+
+		stream.reject(failure);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(onError).toHaveBeenCalledTimes(1);
+		expect(onError).toHaveBeenCalledWith(failure);
+	});
+
+	it("reports an unexpected end of the stream after start to onError", async () => {
+		await start();
+
+		stream.resolve();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(onError).toHaveBeenCalledTimes(1);
+		expect((onError.mock.calls[0][0] as Error).message).toBe("Replication stream ended unexpectedly");
+	});
+
+	it("does not report the end of the stream caused by stop()", async () => {
+		const service = await start();
+
+		await service.stop();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(onError).not.toHaveBeenCalled();
+	});
+
+	it("still rejects with the actionable error when subscribing fails before start", async () => {
+		subscribeSpy.mockImplementation(async () => {
+			throw Object.assign(new Error('replication slot "outbox_slot" does not exist'), { code: "42704" });
+		});
+
+		await expect(start()).rejects.toThrow('Replication slot "outbox_slot" does not exist.');
+	});
+});

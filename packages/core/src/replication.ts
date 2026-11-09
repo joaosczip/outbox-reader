@@ -168,8 +168,37 @@ export const startReplication = async ({
 		}
 	});
 
+	// A stream that ends because stop() was called is not an error.
+	let stopping = false;
+	const stopService = replicationService.stop.bind(replicationService);
+	replicationService.stop = () => {
+		stopping = true;
+		return stopService();
+	};
+
+	// subscribe() runs START_REPLICATION through client.query(), which only settles when the
+	// stream ends. Resolve once streaming has started ('start') so callers get the handle (to
+	// report readiness and stop it on shutdown); a failure before that rejects. After start,
+	// a stream failure or unexpected end goes to onError.
+	let started = false;
+	const startedSignal = new Promise<void>((resolve) => {
+		replicationService.once("start", () => {
+			started = true;
+			resolve();
+		});
+	});
+	const streaming = replicationService.subscribe(plugin, slotName);
+	streaming.then(
+		() => {
+			if (started && !stopping) onError?.(new Error("Replication stream ended unexpectedly"));
+		},
+		(error: unknown) => {
+			if (started && !stopping) onError?.(error);
+		},
+	);
+
 	try {
-		await replicationService.subscribe(plugin, slotName);
+		await Promise.race([startedSignal, streaming]);
 	} catch (error) {
 		throw toActionableReplicationError(error, connectionString, slotName);
 	}
