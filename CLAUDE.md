@@ -39,10 +39,9 @@ bun run reprocess-failed-events
 bun run check-pending-events
 bun run purge-processed-events
 
-# CLI tool for Prisma schema generation (via workspace root)
-bun run schema:generate
-# Or run directly inside the cli package
-cd packages/cli && bun src/cli/generate-schema.ts [options]
+# outy CLI from source (same commands as the published `outy` bin)
+cd packages/cli && bun src/cli/index.ts --help
+cd packages/cli && bun src/cli/index.ts create migration   # prints canonical outbox SQL
 
 # Docker (PostgreSQL + NATS)
 docker compose up -d
@@ -56,20 +55,22 @@ This is a **Bun workspace monorepo**. Always make changes in the specific packag
 outbox-reader/
 ├── packages/
 │   ├── core/        (@outbox-reader/core)       — runtime service: WAL replication, NATS publishing, DB repository, cronjobs
-│   ├── cli/         (@joaosczip/outy-cli)        — developer tooling: Prisma schema generator, outbox table CLI
+│   ├── cli/         (@joaosczip/outy-cli)        — `outy` CLI: replication slot setup, outbox schema/migrations
 │   └── client/      (@joaosczip/outy-client)     — ORM-agnostic client for writing outbox events transactionally
 └── CLAUDE.md
 ```
 
 Each package has its own `CLAUDE.md` with package-specific guidance.
 
+User-facing docs: the root `README.md` is the canonical entry point (quick start, message contract, configuration reference, operations, troubleshooting); `AGENTS.md` is the condensed guide for agents **integrating** the library into another project (not contributor docs) and `llms.txt` indexes the docs. Keep them in sync with behavior changes (env vars, CLI flags, message headers).
+
 ## Monorepo Structure
 
 This is a **Bun workspace monorepo** with three packages:
 
 - **`packages/core`** (`@outbox-reader/core`): The runtime service — WAL replication, event processing, NATS publishing, DB repository, cronjobs.
-- **`packages/cli`** (`@joaosczip/outy-cli`): Developer tooling — Prisma schema generator and CLI for creating the outbox table. Does **not** depend on core.
-- **`packages/client`** (`@joaosczip/outy-client`): ORM-agnostic client library for writing outbox events transactionally. Supports Prisma and Sequelize adapters. Does **not** depend on core.
+- **`packages/cli`** (`@joaosczip/outy-cli`): The `outy` CLI (requires Bun) — `setup replication`, `create schema`, `create migration [--target prisma|sequelize|sql]`, `setup client`. Does **not** depend on core.
+- **`packages/client`** (`@joaosczip/outy-client`): ORM-agnostic client library for writing outbox events transactionally (Node.js >= 18 and Bun). Supports Prisma and Sequelize adapters (`tableName`/`columnNaming` options). Does **not** depend on core. There is no `@outbox-reader/client` package.
 
 ## Architecture
 
@@ -90,7 +91,7 @@ PostgreSQL WAL → replication.ts → OutboxProcessor → NATSPublisher → NATS
 
 The WAL `onChange` callback is built by `createWalChangeHandler()` (`packages/core/src/wal-change-handler.ts`): filter → one batched `findUnprocessedByIds` prefetch → `runOrderedByKey` keyed by `aggregateId` (sequential per aggregate in WAL order, parallel across aggregates, concurrency = `DB_POOL_SIZE`). Per-record publish failures go to the `RetryQueue` and do not reject; batch-level failures (e.g. the prefetch query) reject so the LSN is not acked.
 
-Because Postgres acks are cumulative, `app.ts` treats replication `onError` as fatal: it runs the graceful shutdown and exits with code 1 so the restarted process resumes from the last confirmed LSN. Startup failures also exit 1. The health server exposes `/live`, and `/ready` (alias `/health`) with readiness checks `replication`, `publisher` (`isConnected?.()`) and `database` (`SELECT 1`).
+Because Postgres acks are cumulative, `app.ts` treats replication `onError` as fatal: it runs the graceful shutdown and exits with code 1 so the restarted process resumes from the last confirmed LSN. Startup failures also exit 1 (a missing replication slot is reported with a hint to run `outy setup replication`). The health server exposes `/live`, and `/ready` (alias `/health`) with readiness checks `replication`, `publisher` (`isConnected?.()`) and `database` (`SELECT 1`).
 
 `DATABASE_URL` must be a plain URL (no `?replication=database`): `replication.ts` adds it for the replication connection, and the same URL feeds the regular `pg.Pool`.
 
@@ -98,7 +99,7 @@ Because Postgres acks are cumulative, `app.ts` treats replication `onError` as f
 
 - **`OutboxProcessor`** (`packages/core/src/outbox-processor.ts`): Central orchestrator. Filters WAL changes to outbox inserts, processes them, and delegates to repository and publisher. Both `filterChanges()` and `processInserts()` are separate to allow independent testing.
 - **`OutboxRepository`** (`packages/core/src/outbox-repository.ts`): All DB interactions via a `pg.Pool`. Uses `backOff` (exponential-backoff) for `markAsProcessed`/`markAsFailed` writes. Exposes `onTransaction()` for transactional cronjob operations (uses a `Proxy` to swap the pool client transparently).
-- **`NATSPublisher`** (`packages/core/src/nats-publisher.ts`): Lazy-connects to NATS on first publish. Implements the `Publisher` interface. Uses `backOff` for retries. Publishes using `record.eventType` as the subject and `record.id` as the dedup `msgID` (unique per event, so retries of the same record are deduplicated but distinct events of one aggregate are not; a `duplicate` PubAck is logged as a warning).
+- **`NATSPublisher`** (`packages/core/src/nats-publisher.ts`): Lazy-connects to NATS on first publish. Implements the `Publisher` interface. Uses `backOff` for retries. Publishes to `<subjectPrefix>.<record.eventType>` with `record.id` as the dedup `msgID` (`Nats-Msg-Id`) and headers `Outbox-Id`, `Outbox-Aggregate-Id`, `Outbox-Aggregate-Type`, `Outbox-Event-Type`, `Outbox-Created-At` (ISO-8601). These form the public message contract documented in `README.md#message-contract`; changing them is a breaking change. The `record.id` msgID is unique per event, so retries of the same record are deduplicated but distinct events of one aggregate are not; a `duplicate` PubAck is logged as a warning.
 - **`startReplication`** (`packages/core/src/replication.ts`): Thin wrapper around `LogicalReplicationService`. Sets `replication=database` on the connection string via `buildReplicationConnectionString()` (preserves existing query params). When given `tableName` (the physical name from `applyNamingToTableName`, wired by `app.ts`), it builds the Wal2Json plugin with `buildWal2JsonOptions()` — `add-tables '*.<table>'` (name escaped by `escapeWal2JsonTableName()`), `actions 'insert'`, `include-types 'off'` — so PostgreSQL streams only outbox INSERTs (requires wal2json >= 2.0 for `actions`); without `tableName` every change is streamed. Uses manual LSN acknowledgement: each LSN is acked only after `onChange` resolves; failures and service `error` events go to the optional `onError` callback.
 
 ### Retry Pattern
@@ -119,7 +120,7 @@ A record whose `attempts` reach `MAX_OUTBOX_ATTEMPTS` is marked `DEAD` (by `Outb
 
 ### CLI / Library Usage
 
-`packages/core/src/lib.ts` exports all core components for programmatic use. `packages/cli/src/index.ts` is the public API entry for the CLI package, exporting `PrismaSchemaGenerator` and the schema config types. The `outbox-schema` bin (`packages/cli/bin/outbox-schema.js`) wraps `packages/cli/src/cli/generate-schema.ts` to generate Prisma schema and migrations for the outbox table.
+`packages/core/src/lib.ts` exports all core components for programmatic use (including `startHealthServer`, `createWalChangeHandler`, `RetryQueue`, `loadAppConfig`, `loadCronConfig`). `packages/cli/src/index.ts` is the public API entry for the CLI package, exporting `PrismaSchemaGenerator` and the schema config types. The `outy` bin (`packages/cli/bin/outy.js`) runs the built `packages/cli/src/cli/index.ts` (yargs commands under `src/cli/commands/`) with Bun.
 
 ## Environment Variables
 
@@ -132,12 +133,14 @@ Optional (validated when read; invalid values throw a descriptive error instead 
 - `MAX_OUTBOX_ATTEMPTS`: integer >= 1, default `5`
 - `COLUMN_NAMING`: `snake_case` | `camelCase` | `PascalCase`, default `snake_case`
 - `TABLE_NAME`: default `outbox`
-- `PUBLISHER_CONFIG_PATH`: default `./publisher.yaml` (validated per provider by `loadPublisherConfig`)
+- `PUBLISHER_CONFIG_PATH`: default `./publisher.yaml` (validated per provider by `loadPublisherConfig`; only `nats` is implemented, `sqs`/`kafka` fail fast)
+- NATS overrides (take precedence over `publisher.yaml` options): `NATS_SERVERS` (comma-separated; `TARGET_NATS_URL` is a deprecated alias), `NATS_SUBJECT_PREFIX`, `NATS_USER`, `NATS_PASSWORD`, `NATS_TOKEN`, `NATS_CONNECTION_NAME`. If the YAML file is missing and `NATS_SERVERS` + `NATS_SUBJECT_PREFIX` are set, env-only mode is used (the Docker image ships no `publisher.yaml`).
+- `PORT` (health server, default `4599`), `LOG_LEVEL` (default `info`), `PROMETHEUS_PORT` (default `9464`), `PROMETHEUS_EXPORTER_ENABLED`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, `OTEL_METRICS_EXPORT_INTERVAL_MS` (`packages/core/src/telemetry.ts`)
 - `PENDING_EVENTS_THRESHOLD_MINUTES` (cronjobs): integer >= 1, default `10`
 - `PROCESSED_RETENTION_DAYS` (cronjobs): integer >= 1, default `7` — `purge-processed-events` deletes `PROCESSED` records older than this
 - `DEAD_RETENTION_DAYS` (cronjobs): integer >= 1, unset = never purge `DEAD` records (opt-in)
 
-See `.env.example` and `packages/core/src/config.ts` for all NATS and optional variables.
+See `.env.example`, `packages/core/src/config.ts` and the configuration reference in `README.md` for the full list.
 
 ## Test Structure
 
