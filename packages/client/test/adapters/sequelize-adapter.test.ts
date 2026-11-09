@@ -71,6 +71,22 @@ describe("SequelizeAdapter", () => {
 		expect(options?.transaction).toBe(tx);
 	});
 
+	it("uses the event id when provided instead of generating one", async () => {
+		const providedId = "0190f0e0-1234-7abc-8def-0123456789ab";
+
+		const id = await adapter.create({ ...event, id: providedId }, { underlying: tx });
+
+		expect(id).toBe(providedId);
+		expect((sequelize.query.mock.calls[0][1]?.bind as unknown[])[0]).toBe(providedId);
+	});
+
+	it("validates the event before querying the database", async () => {
+		await expect(adapter.create({ ...event, aggregateId: "  " }, { underlying: tx })).rejects.toThrow(
+			/CreateOutboxEvent\.aggregateId must be a non-empty string/,
+		);
+		expect(sequelize.query).not.toHaveBeenCalled();
+	});
+
 	describe("table and column naming", () => {
 		it.each(NAMING_CASES.map((c) => [c.title, c] as const))(
 			"builds the INSERT for %s",

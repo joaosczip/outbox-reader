@@ -68,6 +68,22 @@ describe("PrismaAdapter", () => {
 		]);
 	});
 
+	it("uses the event id when provided instead of generating one", async () => {
+		const providedId = "0190f0e0-1234-7abc-8def-0123456789ab";
+
+		const id = await adapter.create({ ...event, id: providedId }, { underlying: tx });
+
+		expect(id).toBe(providedId);
+		expect(tx.$executeRawUnsafe.mock.calls[0][1]).toBe(providedId);
+	});
+
+	it("validates the event before querying the database", async () => {
+		await expect(adapter.create({ ...event, eventType: "" }, { underlying: tx })).rejects.toThrow(
+			/CreateOutboxEvent\.eventType must be a non-empty string/,
+		);
+		expect(tx.$executeRawUnsafe).not.toHaveBeenCalled();
+	});
+
 	it("generates a distinct id per call", async () => {
 		const first = await adapter.create(event, { underlying: tx });
 		const second = await adapter.create(event, { underlying: tx });
