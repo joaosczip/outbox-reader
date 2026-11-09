@@ -48,7 +48,7 @@ The examples use the default table `outbox` with `snake_case` columns, the slot 
 
 ### 1. Prepare PostgreSQL
 
-PostgreSQL needs `wal_level = logical`, the `wal2json` output plugin, and a user with the `REPLICATION` role. These settings need a server restart. See [PostgreSQL setup in detail](#postgresql-setup-in-detail) for Docker, docker-compose and package-manager instructions.
+PostgreSQL needs `wal_level = logical`, the `wal2json` output plugin, and a user with the `REPLICATION` role. The table generated in step 3 also uses the [`pg_uuidv7`](https://github.com/fboulnois/pg_uuidv7) extension (`uuid_generate_v7()` as the `id` default): install it on the server (it is not part of the official `postgres` image, nor of this repo's `Dockerfile.pg`), or remove the `CREATE EXTENSION` line and the `DEFAULT uuid_generate_v7()` from the generated SQL. The client always sends its own UUIDv7 id, so the default is only a fallback for other producers. These settings need a server restart. See [PostgreSQL setup in detail](#postgresql-setup-in-detail) for Docker, docker-compose and package-manager instructions.
 
 ```sql
 -- postgresql.conf (then restart): wal_level = logical, max_wal_senders = 10, max_replication_slots = 10
@@ -442,6 +442,7 @@ Prometheus metrics are served at `http://<host>:9464/metrics` (`PROMETHEUS_PORT`
 | `option "actions" ... is unknown` (or similar wal2json option error) | wal2json older than 2.0 | Upgrade wal2json to 2.x. |
 | `must be superuser or replication role to use replication slots` / `permission denied to use replication slots` | User lacks the `REPLICATION` role | `ALTER USER <user> REPLICATION;` |
 | `replication slot "<name>" does not exist` (service exits 1) | Slot not created, or `REPLICATION_SLOT_NAME` differs from the slot name | Run `outy setup replication -s <name>` (step 2) or fix `REPLICATION_SLOT_NAME`. |
+| `extension "pg_uuidv7" is not available` (running the step 3 SQL) | The generated table uses `uuid_generate_v7()` from the pg_uuidv7 extension | Install [pg_uuidv7](https://github.com/fboulnois/pg_uuidv7) on the server, or drop the `CREATE EXTENSION` line and the `id` default (the client always supplies the id). |
 | `replication slot "<name>" is active for PID ...` | Another instance is consuming the slot | Run a single instance per slot. |
 | `Failed to read publisher config at "./publisher.yaml"` | No `publisher.yaml` and env-only mode not enabled | Set both `NATS_SERVERS` and `NATS_SUBJECT_PREFIX`, or mount a `publisher.yaml` at `PUBLISHER_CONFIG_PATH`. |
 | Publishes fail with `503` / `no responders available` | No JetStream stream covers the subject | Create a stream with subjects `<prefix>.>` (step 4). Check that `NATS_SUBJECT_PREFIX` matches the stream's subjects. |
