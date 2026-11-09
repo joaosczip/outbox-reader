@@ -20,7 +20,7 @@ const DEFAULT_PACKAGE_MANAGER: PackageManagerInfo = {
 	installCommand: "install",
 };
 
-const PACKAGE_NAME = "@outbox-reader/client";
+export const CLIENT_PACKAGE_NAME = "@joaosczip/outy-client";
 
 export type ShellExecutor = (cmd: string[]) => Promise<void>;
 
@@ -38,7 +38,7 @@ export class ClientInstaller {
 
 	async install(): Promise<ClientInstallerResult> {
 		const pm = this.detectPackageManager();
-		const cmd = [pm.name, pm.installCommand, PACKAGE_NAME];
+		const cmd = [pm.name, pm.installCommand, CLIENT_PACKAGE_NAME];
 
 		console.log(`Detected package manager: ${pm.name}`);
 		console.log(`Running: ${cmd.join(" ")}`);

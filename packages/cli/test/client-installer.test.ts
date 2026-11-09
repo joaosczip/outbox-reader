@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
 import fs from "node:fs";
-import { ClientInstaller, type ShellExecutor } from "../src/services/client-installer";
+import clientPackageJson from "../../client/package.json";
+import { CLIENT_PACKAGE_NAME, ClientInstaller, type ShellExecutor } from "../src/services/client-installer";
 
 describe("ClientInstaller", () => {
 	let executedCommands: string[][];
@@ -92,7 +93,7 @@ describe("ClientInstaller", () => {
 			const result = await installer.install();
 
 			expect(result).toEqual({ packageManager: "bun" });
-			expect(executedCommands).toEqual([["bun", "add", "@outbox-reader/client"]]);
+			expect(executedCommands).toEqual([["bun", "add", "@joaosczip/outy-client"]]);
 		});
 
 		it("returns the detected package manager name", async () => {
@@ -102,7 +103,17 @@ describe("ClientInstaller", () => {
 			const result = await installer.install();
 
 			expect(result).toEqual({ packageManager: "yarn" });
-			expect(executedCommands).toEqual([["yarn", "add", "@outbox-reader/client"]]);
+			expect(executedCommands).toEqual([["yarn", "add", "@joaosczip/outy-client"]]);
+		});
+
+		it("installs the package published by packages/client (regression: @outbox-reader/client is not on npm)", async () => {
+			const installer = new ClientInstaller(shellExecutor);
+
+			await installer.install();
+
+			expect(CLIENT_PACKAGE_NAME).toBe(clientPackageJson.name);
+			expect(executedCommands[0][2]).toBe(clientPackageJson.name);
+			expect(executedCommands[0][2]).not.toBe("@outbox-reader/client");
 		});
 
 		it("propagates errors from the shell executor", async () => {
