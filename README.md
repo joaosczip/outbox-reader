@@ -439,6 +439,7 @@ Prometheus metrics are served at `http://<host>:9464/metrics` (`PROMETHEUS_PORT`
 |---|---|---|
 | `logical decoding requires wal_level >= logical` | PostgreSQL not configured for logical replication | Set `wal_level = logical` (plus `max_wal_senders`, `max_replication_slots`) and restart PostgreSQL. Check with `SHOW wal_level;`. |
 | `could not access file "wal2json": No such file or directory` | wal2json plugin not installed on the server | Install `postgresql-<version>-wal2json` or use an image with it ([details](#install-wal2json)). |
+| `library "wal2json" may not be used as an output plugin` | Ubuntu's PostgreSQL packages only allow output plugins listed in `output_plugin_libraries` | Add `output_plugin_libraries = 'wal2json'` to `postgresql.conf` and reload (`SELECT pg_reload_conf();`). |
 | `option "actions" ... is unknown` (or similar wal2json option error) | wal2json older than 2.0 | Upgrade wal2json to 2.x. |
 | `must be superuser or replication role to use replication slots` / `permission denied to use replication slots` | User lacks the `REPLICATION` role | `ALTER USER <user> REPLICATION;` |
 | `replication slot "<name>" does not exist` (service exits 1) | Slot not created, or `REPLICATION_SLOT_NAME` differs from the slot name | Run `outy setup replication -s <name>` (step 2) or fix `REPLICATION_SLOT_NAME`. |

@@ -92,6 +92,7 @@ Details: [README: message contract](README.md#message-contract).
 |---|---|
 | `logical decoding requires wal_level >= logical` | set `wal_level = logical` and **restart** PostgreSQL |
 | `could not access file "wal2json"` | install wal2json (>= 2.0) on the database server |
+| `library "wal2json" may not be used as an output plugin` | Ubuntu's PostgreSQL packages only allow output plugins listed in `output_plugin_libraries` | Add `output_plugin_libraries = 'wal2json'` to `postgresql.conf` and reload (`SELECT pg_reload_conf();`). |
 | service exits 1 saying the slot does not exist | run step 2, and check `REPLICATION_SLOT_NAME` matches `-s` |
 | publishes fail with "no responders" | create the stream (step 4) with subjects `<prefix>.>` |
 | `Failed to read publisher config` | set both `NATS_SERVERS` and `NATS_SUBJECT_PREFIX` (env-only mode) or mount a `publisher.yaml` |
