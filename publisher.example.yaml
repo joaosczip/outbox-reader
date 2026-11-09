@@ -1,8 +1,20 @@
 # Publisher configuration for outbox-reader
 # Copy to publisher.yaml and adjust values for your environment.
 # Point to it via: PUBLISHER_CONFIG_PATH=./publisher.yaml (default)
+#
+# Environment overrides (provider nats): each variable, when set and non-empty, overrides the
+# matching option below.
+#   NATS_SERVERS          -> options.servers (comma-separated, e.g. nats://a:4222,nats://b:4222)
+#   TARGET_NATS_URL       -> options.servers (deprecated alias, used only if NATS_SERVERS is unset)
+#   NATS_SUBJECT_PREFIX   -> options.subjectPrefix
+#   NATS_USER             -> options.user
+#   NATS_PASSWORD         -> options.pass
+#   NATS_TOKEN            -> options.token
+#   NATS_CONNECTION_NAME  -> options.name
+# If this file does not exist, NATS_SERVERS (or TARGET_NATS_URL) + NATS_SUBJECT_PREFIX are enough:
+# a default nats config (the retry and connection values below) is built from the environment.
 
-provider: nats  # Options: nats | sqs (not yet implemented) | kafka (not yet implemented)
+provider: nats  # Only "nats" is supported (see "Planned providers" below)
 
 retryConfig:
   numOfAttempts: 5
@@ -18,25 +30,16 @@ options:
   #   - nats://server1:4222
   #   - nats://server2:4222
   name: outbox-reader
-  subjectPrefix: test  # Required: prefix for NATS subjects (e.g. "events" → "events.OrderCreated")
+  # Required. Messages are published to subject "<subjectPrefix>.<eventType>"
+  # (e.g. "events" -> "events.OrderCreated"). A JetStream stream whose subjects match
+  # "<subjectPrefix>.>" (e.g. "events.>") must exist, otherwise publishes fail.
+  subjectPrefix: test
   maxReconnectAttempts: -1   # -1 = unlimited
   reconnectTimeWait: 2000    # ms
   timeout: 20000             # ms
+  # Prefer NATS_USER / NATS_PASSWORD / NATS_TOKEN over keeping secrets in this file.
   # user: my-user
   # pass: my-password
   # token: my-token
 
-# --- SQS (not yet implemented) ---
-# provider: sqs
-# retryConfig: { numOfAttempts: 5, startingDelayInMs: 500, maxDelayInMs: 5000, jitter: full }
-# options:
-#   region: us-east-1
-#   queueUrl: https://sqs.us-east-1.amazonaws.com/123456789/my-queue
-
-# --- Kafka (not yet implemented) ---
-# provider: kafka
-# retryConfig: { numOfAttempts: 5, startingDelayInMs: 500, maxDelayInMs: 5000, jitter: full }
-# options:
-#   brokers:
-#     - localhost:9092
-#   clientId: outbox-reader
+# Planned providers (not implemented yet; configuring them fails at startup): sqs, kafka.
