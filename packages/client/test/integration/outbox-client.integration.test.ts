@@ -88,6 +88,39 @@ describe.skipIf(!databaseUrl)("OutboxClient (integration)", () => {
 		await pool.query("DELETE FROM outbox");
 	});
 
+	describe("camelCase naming", () => {
+		beforeAll(async () => {
+			await pool.query(`
+				CREATE TABLE IF NOT EXISTS "outboxEvents" (
+					"id" UUID PRIMARY KEY,
+					"aggregateId" VARCHAR(50) NOT NULL,
+					"aggregateType" VARCHAR(50) NOT NULL,
+					"eventType" VARCHAR(50) NOT NULL,
+					"payload" JSONB NOT NULL,
+					"status" TEXT NOT NULL DEFAULT 'PENDING',
+					"attempts" INTEGER NOT NULL DEFAULT 0,
+					"createdAt" TIMESTAMP NOT NULL DEFAULT NOW()
+				)
+			`);
+		});
+
+		afterAll(async () => {
+			await pool.query('DROP TABLE IF EXISTS "outboxEvents"');
+		});
+
+		it("writes to the quoted camelCase table and columns", async () => {
+			const outbox = new OutboxClient(
+				new PrismaAdapter({ tableName: "outbox_events", columnNaming: "camelCase" }),
+			);
+
+			const id = await outbox.create(event, { underlying: prismaLike(pool) });
+
+			const { rows } = await pool.query('SELECT * FROM "outboxEvents" WHERE "id" = $1', [id]);
+			expect(rows).toHaveLength(1);
+			expect(rows[0]).toMatchObject({ aggregateId: event.aggregateId, status: OutboxStatus.PENDING });
+		});
+	});
+
 	for (const testCase of cases) {
 		describe(testCase.name, () => {
 			let outbox: OutboxClient<unknown>;

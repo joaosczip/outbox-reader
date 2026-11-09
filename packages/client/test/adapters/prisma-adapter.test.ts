@@ -1,7 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { PrismaAdapter } from "../../src/adapters/prisma-adapter";
+import { PrismaAdapter, type PrismaAdapterOptions } from "../../src/adapters/prisma-adapter";
 import { OutboxStatus } from "../../src/models/outbox-status";
-import { type MockPrismaTransactionClient, UUID_V7, createPrismaTransactionMock, normalizeSql } from "../mocks/orm";
+import {
+	INVALID_OPTIONS,
+	type MockPrismaTransactionClient,
+	NAMING_CASES,
+	UUID_V7,
+	createPrismaTransactionMock,
+	normalizeSql,
+} from "../mocks/orm";
 
 const event = {
 	aggregateId: "order-1",
@@ -43,15 +50,13 @@ describe("PrismaAdapter", () => {
 		});
 	});
 
-	it("inserts a PENDING record into the default snake_case outbox table through the transaction", async () => {
+	it("inserts a PENDING record with the event values through the transaction client", async () => {
 		const id = await adapter.create(event, { underlying: tx });
 
 		expect(id).toMatch(UUID_V7);
 		expect(tx.$executeRawUnsafe).toHaveBeenCalledTimes(1);
 		const [sql, ...values] = tx.$executeRawUnsafe.mock.calls[0];
-		expect(normalizeSql(sql)).toBe(
-			"INSERT INTO outbox (id, aggregate_id, aggregate_type, event_type, payload, status, attempts, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())",
-		);
+		expect(normalizeSql(sql)).toBe(NAMING_CASES[0].sql);
 		expect(values).toEqual([
 			id,
 			"order-1",
@@ -61,6 +66,37 @@ describe("PrismaAdapter", () => {
 			OutboxStatus.PENDING,
 			0,
 		]);
+	});
+
+	it("generates a distinct id per call", async () => {
+		const first = await adapter.create(event, { underlying: tx });
+		const second = await adapter.create(event, { underlying: tx });
+
+		expect(first).not.toBe(second);
+	});
+
+	describe("table and column naming", () => {
+		it.each(NAMING_CASES.map((c) => [c.title, c] as const))(
+			"builds the INSERT for %s",
+			async (_title, testCase) => {
+				const namedAdapter = new PrismaAdapter(testCase.options as PrismaAdapterOptions | undefined);
+
+				const id = await namedAdapter.create(event, { underlying: tx });
+
+				const [sql, ...values] = tx.$executeRawUnsafe.mock.calls[0];
+				expect(normalizeSql(sql)).toBe(testCase.sql);
+				expect(values[0]).toBe(id);
+			},
+		);
+
+		it.each(INVALID_OPTIONS.map((c) => [JSON.stringify(c.options), c] as const))(
+			"rejects invalid options %s at construction",
+			(_title, testCase) => {
+				expect(() => new PrismaAdapter(testCase.options as unknown as PrismaAdapterOptions)).toThrow(
+					testCase.error,
+				);
+			},
+		);
 	});
 
 	it("propagates database errors", async () => {
