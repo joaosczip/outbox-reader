@@ -118,6 +118,8 @@ psql "$DATABASE_URL" -c '\d outbox'
 # Table "public.outbox" with columns id, aggregate_id, aggregate_type, event_type, payload, status, attempts, created_at, processed_at, ...
 ```
 
+Upgrading an existing table: the service needs `id` of type `UUID` and a nullable `requeued_at TIMESTAMP` column, plus the partial indexes. See [Migrating an existing installation](packages/cli/README.md#migrating-an-existing-installation).
+
 ### 4. Create the JetStream stream
 
 The service publishes to `<NATS_SUBJECT_PREFIX>.<eventType>`. A stream whose subjects cover `<prefix>.>` **must exist before the service starts**. Without it, publishes fail with "no responders".
@@ -303,7 +305,7 @@ Each outbox record becomes one JetStream message:
 Guarantees:
 
 - **At-least-once delivery.** A record can be published more than once, for example when the publish succeeded but marking it `PROCESSED` failed and a cronjob republished it after the duplicate window. Consumers must be idempotent: deduplicate on `Outbox-Id`.
-- **Ordering per aggregate.** Events of the same `aggregateId` are published sequentially in commit order. Different aggregates are published in parallel. A record that fails and is retried later (by the retry queue or the cronjobs) can arrive after newer events of the same aggregate. If strict ordering matters, carry a version in the payload or compare `Outbox-Created-At`.
+- **Ordering per aggregate.** Within one service process, events of the same `aggregateId` are published in `(created_at, id)` order: a later event waits while an older one of the same aggregate is still `PENDING` or `FAILED`, and is released once that one is published or becomes `DEAD` (a `DEAD` event is skipped, not delivered). Different aggregates are published in parallel. This is not a cross-process lock: the service and the `check-pending-events` sweeper can race and publish the same record twice, so dedupe on `Outbox-Id`. See [Aggregate order](packages/core/README.md#aggregate-order).
 - **No message without a commit.** The row is published only after your transaction commits; a rolled-back transaction publishes nothing.
 
 ## Naming must match everywhere

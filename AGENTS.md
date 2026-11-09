@@ -82,7 +82,7 @@ A mismatch does not crash the service: it is healthy but publishes nothing, beca
 - Body: the JSON payload.
 - `Nats-Msg-Id`: the outbox record id (JetStream dedup within the stream's duplicate window, default 2m).
 - Headers: `Outbox-Id`, `Outbox-Aggregate-Id`, `Outbox-Aggregate-Type`, `Outbox-Event-Type`, `Outbox-Created-At` (ISO-8601).
-- Delivery is at-least-once. Per aggregate, events are published in commit order; a retried record can arrive after newer ones.
+- Delivery is at-least-once. Per aggregate, events are published in `(created_at, id)` order: a later event waits while an older one is `PENDING`/`FAILED`; a `DEAD` one is skipped. Not a cross-process lock, so consumers still dedupe on `Outbox-Id`.
 
 Details: [README: message contract](README.md#message-contract).
 
