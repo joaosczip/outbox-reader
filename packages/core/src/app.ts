@@ -172,6 +172,9 @@ process.once("SIGINT", () => shutdown("SIGINT"));
 	});
 	if (!isShuttingDown) replicationHealthy = true;
 })().catch((error) => {
-	logger.error({ message: "Error starting outbox reader", error });
+	// Put the (possibly actionable, e.g. "create the replication slot with ...") reason in
+	// the message itself so it is visible in plain log lines and the OTel log body.
+	const reason = error instanceof Error ? error.message : String(error);
+	logger.error({ message: `Error starting outbox reader: ${reason}`, error });
 	void shutdown("startup-failure", { failed: true });
 });
